@@ -1,0 +1,573 @@
+<instana_analysis_guide>
+  <overview>
+    Comprehensive guide for using Instana MCP server tools to gather observability
+    data, analyze application performance, and identify anomalies. This guide covers
+    all available Instana resources and their optimal usage patterns for incident
+    investigation.
+    
+    CRITICAL: Instana is the PRIMARY source for ALL metrics, services, and application data.
+    - When asked for metrics: Use Instana MCP tools
+    - When asked for services: Use Instana MCP tools (manage_applications)
+    - When asked for application data: Use Instana MCP tools
+    - When asked for infrastructure metrics: Use Instana MCP tools (analyze_infrastructure)
+    
+    OpenShift commands should ONLY be used during root cause analysis to correlate
+    cluster state with Instana findings.
+  </overview>
+
+  <tool_reference>
+    <tool name="manage_events">
+      <description>
+        Access Instana events including issues, incidents, changes, and Kubernetes info events
+      </description>
+      <operations>
+        <operation name="get_issues">
+          <purpose>Retrieve issue events (problems detected by Instana)</purpose>
+          <parameters>
+            <param name="time_range">Natural language like "last 24 hours", "last 2 days"</param>
+            <param name="from_time">Unix timestamp in milliseconds (optional)</param>
+            <param name="to_time">Unix timestamp in milliseconds (optional)</param>
+            <param name="max_events">Limit number of events processed (default: 50)</param>
+            <param name="filter_event_updates">Show only events with state changes (boolean)</param>
+            <param name="exclude_triggered_before">Exclude events triggered before timeframe (boolean)</param>
+          </parameters>
+          <usage_example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_events</tool_name>
+<arguments>
+{
+  "operation": "get_issues",
+  "params": {
+    "time_range": "last 24 hours",
+    "max_events": 100,
+    "filter_event_updates": true
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></usage_example>
+        </operation>
+
+        <operation name="get_incidents">
+          <purpose>Retrieve incident events (grouped issues requiring attention)</purpose>
+          <when_to_use>
+            When investigating active or recent incidents that have been escalated
+          </when_to_use>
+          <usage_example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_events</tool_name>
+<arguments>
+{
+  "operation": "get_incidents",
+  "params": {
+    "time_range": "last 6 hours",
+    "exclude_triggered_before": true
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></usage_example>
+        </operation>
+
+        <operation name="get_kubernetes_info_events">
+          <purpose>Get Kubernetes-specific events with detailed analysis</purpose>
+          <when_to_use>
+            When investigating pod lifecycle issues, scheduling problems, or K8s-specific errors
+          </when_to_use>
+          <usage_example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_events</tool_name>
+<arguments>
+{
+  "operation": "get_kubernetes_info_events",
+  "params": {
+    "time_range": "last 12 hours",
+    "max_events": 200
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></usage_example>
+        </operation>
+
+        <operation name="get_agent_monitoring_events">
+          <purpose>Get agent monitoring events (agent health, connectivity)</purpose>
+          <when_to_use>
+            When suspecting agent issues or gaps in monitoring coverage
+          </when_to_use>
+        </operation>
+
+        <operation name="get_changes">
+          <purpose>Get change events (deployments, configuration changes)</purpose>
+          <when_to_use>
+            To correlate incidents with recent changes or deployments
+          </when_to_use>
+        </operation>
+
+        <operation name="get_event">
+          <purpose>Get detailed information about a specific event</purpose>
+          <parameters>
+            <param name="event_id">The specific event ID to retrieve</param>
+          </parameters>
+        </operation>
+      </operations>
+    </tool>
+
+    <tool name="manage_applications">
+      <description>
+        Query application metrics, manage alert configurations, and access application settings
+      </description>
+      <resource_types>
+        <resource_type name="metrics">
+          <purpose>Query application performance metrics, services, and endpoints</purpose>
+          <critical_operations>
+            <operation name="application">
+              <purpose>Query application-level metrics with grouping and filtering</purpose>
+              <key_parameters>
+                <param name="query">Application name or filter</param>
+                <param name="time_frame">Time window for metrics (e.g., "1h", "24h")</param>
+                <param name="metrics">Array of metric objects with metric name and aggregation</param>
+                <param name="tag_filter_expression">Filter by tags (application.name, service.name, etc.)</param>
+                <param name="group">Group results by tags</param>
+                <param name="order">Sort results by metric</param>
+              </key_parameters>
+              <common_use_cases>
+                <use_case name="list_services">
+                  <description>List all services in an application</description>
+                  <example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_applications</tool_name>
+<arguments>
+{
+  "resource_type": "metrics",
+  "operation": "application",
+  "params": {
+    "tag_filter_expression": {
+      "type": "TAG_FILTER",
+      "name": "application.name",
+      "operator": "EQUALS",
+      "entity": "DESTINATION",
+      "value": "my-application"
+    },
+    "group": {
+      "groupbyTag": "service.name",
+      "groupbyTagEntity": "DESTINATION"
+    },
+    "time_frame": "1h"
+  }
+}
+</arguments>
+</use_mcp_tool>
+                  ]]></example>
+                </use_case>
+
+                <use_case name="error_rate_analysis">
+                  <description>Analyze error rates for a service</description>
+                  <example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_applications</tool_name>
+<arguments>
+{
+  "resource_type": "metrics",
+  "operation": "application",
+  "params": {
+    "tag_filter_expression": {
+      "type": "TAG_FILTER",
+      "name": "service.name",
+      "operator": "EQUALS",
+      "entity": "DESTINATION",
+      "value": "payment-service"
+    },
+    "metrics": [
+      {"metric": "calls", "aggregation": "SUM"},
+      {"metric": "errors", "aggregation": "SUM"},
+      {"metric": "latency", "aggregation": "MEAN"}
+    ],
+    "time_frame": "24h"
+  }
+}
+</arguments>
+</use_mcp_tool>
+                  ]]></example>
+                </use_case>
+
+                <use_case name="latency_percentiles">
+                  <description>Get latency percentiles for performance analysis</description>
+                  <example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_applications</tool_name>
+<arguments>
+{
+  "resource_type": "metrics",
+  "operation": "application",
+  "params": {
+    "tag_filter_expression": {
+      "type": "TAG_FILTER",
+      "name": "endpoint.name",
+      "operator": "CONTAINS",
+      "entity": "DESTINATION",
+      "value": "/api/orders"
+    },
+    "metrics": [
+      {"metric": "latency", "aggregation": "P50"},
+      {"metric": "latency", "aggregation": "P90"},
+      {"metric": "latency", "aggregation": "P95"},
+      {"metric": "latency", "aggregation": "P99"}
+    ],
+    "time_frame": "6h"
+  }
+}
+</arguments>
+</use_mcp_tool>
+                  ]]></example>
+                </use_case>
+              </common_use_cases>
+            </operation>
+          </critical_operations>
+        </resource_type>
+
+        <resource_type name="alert_config">
+          <purpose>Manage application-specific alert configurations</purpose>
+          <operations>
+            <operation name="find_active">Get active alert configurations</operation>
+            <operation name="find">Get specific alert by ID</operation>
+          </operations>
+          <usage_example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_applications</tool_name>
+<arguments>
+{
+  "resource_type": "alert_config",
+  "operation": "find_active",
+  "params": {
+    "application_name": "my-application"
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></usage_example>
+        </resource_type>
+
+        <resource_type name="settings">
+          <purpose>Access application perspectives, endpoints, services configuration</purpose>
+          <operations>
+            <operation name="get_all">List all configurations of a type</operation>
+            <operation name="get">Get specific configuration</operation>
+          </operations>
+        </resource_type>
+
+        <resource_type name="catalog">
+          <purpose>Get available tags and metrics for applications</purpose>
+          <operations>
+            <operation name="get_tag_catalog">Get available tags for filtering/grouping</operation>
+            <operation name="get_metric_catalog">Get available metrics</operation>
+          </operations>
+          <usage_example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_applications</tool_name>
+<arguments>
+{
+  "resource_type": "catalog",
+  "operation": "get_tag_catalog",
+  "params": {
+    "use_case": "GROUPING",
+    "data_source": "CALLS"
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></usage_example>
+        </resource_type>
+      </resource_types>
+    </tool>
+
+    <tool name="analyze_infrastructure">
+      <description>
+        Two-pass infrastructure analysis for querying entity metrics (JVM, Kubernetes, hosts, databases)
+      </description>
+      <workflow>
+        <pass number="1">
+          <title>Intent to Schema</title>
+          <description>
+            Provide natural language intent and entity hint. Server returns full schema
+            with available metrics and filters.
+          </description>
+          <example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>analyze_infrastructure</tool_name>
+<arguments>
+{
+  "intent": "maximum heap size of JVM on host galactica1",
+  "entity": "jvm"
+}
+</arguments>
+</use_mcp_tool>
+          ]]></example>
+        </pass>
+
+        <pass number="2">
+          <title>Selections to Results</title>
+          <description>
+            Provide exact selections from schema. Server builds payload and calls API.
+          </description>
+          <parameters>
+            <param name="entity_type">Exact entity type from schema (e.g., "jvmRuntimePlatform")</param>
+            <param name="metrics">Array of metric names (e.g., ["jvm.heap.maxSize", "jvm.heap.used"])</param>
+            <param name="aggregation">Aggregation type (max, mean, sum, min)</param>
+            <param name="filters">List of name/value filter pairs</param>
+            <param name="groupBy">Array of tag names to group by (optional)</param>
+            <param name="timeRange">Time range string (e.g., "1h", "24h") (optional, default: "1h")</param>
+            <param name="order">Dict with "by" (metric) and "direction" (ASC/DESC) (optional)</param>
+          </parameters>
+          <example><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>analyze_infrastructure</tool_name>
+<arguments>
+{
+  "selections": {
+    "entity_type": "jvmRuntimePlatform",
+    "metrics": ["jvm.heap.maxSize", "jvm.heap.used", "jvm.gc.minorTime"],
+    "aggregation": "max",
+    "filters": [
+      {"name": "host.name", "value": "galactica1"}
+    ],
+    "timeRange": "6h"
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></example>
+        </pass>
+      </workflow>
+
+      <common_entities>
+        <entity name="jvmRuntimePlatform">JVM metrics (heap, GC, threads)</entity>
+        <entity name="kubernetesPod">Kubernetes pod metrics</entity>
+        <entity name="kubernetesDeployment">Kubernetes deployment metrics</entity>
+        <entity name="host">Host/server metrics (CPU, memory, disk)</entity>
+        <entity name="dockerContainer">Container metrics</entity>
+        <entity name="database">Database metrics (connections, queries)</entity>
+      </common_entities>
+    </tool>
+
+    <tool name="manage_websites">
+      <description>
+        Query website beacon data for frontend performance monitoring
+      </description>
+      <critical_workflow>
+        <step>ALWAYS call get_tag_catalog first to get valid tag names</step>
+        <step>Then use returned tags in analyze operations</step>
+      </critical_workflow>
+      <resource_types>
+        <resource_type name="catalog">
+          <operation name="get_tag_catalog">Get valid tag names for beacon type</operation>
+          <operation name="get_metrics">Get available metric IDs</operation>
+        </resource_type>
+        <resource_type name="analyze">
+          <operation name="get_beacon_groups">Grouped/aggregated beacon data</operation>
+          <operation name="get_beacons">Individual beacon data</operation>
+        </resource_type>
+      </resource_types>
+    </tool>
+
+    <tool name="manage_slo">
+      <description>
+        Access SLO configurations, reports, alerts, and correction windows
+      </description>
+      <resource_types>
+        <resource_type name="configuration">SLO definitions and targets</resource_type>
+        <resource_type name="report">SLO compliance reports with error budget</resource_type>
+        <resource_type name="alert">SLO-based alerting rules</resource_type>
+        <resource_type name="correction">Maintenance windows for SLO calculations</resource_type>
+      </resource_types>
+    </tool>
+
+    <tool name="manage_automation">
+      <description>
+        Access automation actions catalog and execution history
+      </description>
+      <resource_types>
+        <resource_type name="catalog">Browse available automation actions</resource_type>
+        <resource_type name="history">View action execution history</resource_type>
+      </resource_types>
+    </tool>
+
+    <tool name="manage_custom_dashboards">
+      <description>
+        Manage custom dashboards for visualization
+      </description>
+      <operations>
+        <operation name="get_all">List all dashboards</operation>
+        <operation name="get">Get specific dashboard</operation>
+      </operations>
+    </tool>
+  </tool_reference>
+
+  <investigation_patterns>
+    <pattern name="incident_timeline_reconstruction">
+      <description>Reconstruct the sequence of events leading to an incident</description>
+      <steps>
+        <step>Get incidents and issues for the time window</step>
+        <step>Get change events to identify recent deployments</step>
+        <step>Get Kubernetes events for infrastructure changes</step>
+        <step>Correlate timestamps to build timeline</step>
+      </steps>
+    </pattern>
+
+    <pattern name="service_dependency_analysis">
+      <description>Understand service call patterns and dependencies</description>
+      <steps>
+        <step>List all services in the application</step>
+        <step>Query metrics for each service (calls, errors, latency)</step>
+        <step>Identify services with elevated error rates</step>
+        <step>Trace upstream and downstream dependencies</step>
+      </steps>
+    </pattern>
+
+    <pattern name="performance_degradation_analysis">
+      <description>Investigate latency increases or throughput drops</description>
+      <steps>
+        <step>Get latency percentiles (P50, P90, P95, P99) over time</step>
+        <step>Compare current metrics to baseline</step>
+        <step>Identify slow endpoints or services</step>
+        <step>Check infrastructure metrics (CPU, memory, GC)</step>
+        <step>Look for resource saturation or contention</step>
+      </steps>
+    </pattern>
+
+    <pattern name="error_spike_investigation">
+      <description>Investigate sudden increases in error rates</description>
+      <steps>
+        <step>Get error count and rate metrics</step>
+        <step>Group errors by type or endpoint</step>
+        <step>Check for recent changes or deployments</step>
+        <step>Examine traces for failed requests</step>
+        <step>Look for downstream service failures</step>
+      </steps>
+    </pattern>
+
+    <pattern name="resource_exhaustion_detection">
+      <description>Identify resource constraints causing issues</description>
+      <steps>
+        <step>Query JVM heap usage and GC metrics</step>
+        <step>Check container CPU and memory utilization</step>
+        <step>Examine database connection pool metrics</step>
+        <step>Look for thread pool exhaustion</step>
+        <step>Check for disk space or I/O saturation</step>
+      </steps>
+    </pattern>
+  </investigation_patterns>
+
+  <best_practices>
+    <practice>
+      <title>Start with broad queries, then narrow down</title>
+      <description>
+        Begin with application-level metrics to identify affected services,
+        then drill down to specific endpoints or infrastructure components
+      </description>
+    </practice>
+
+    <practice>
+      <title>Use appropriate time windows</title>
+      <description>
+        - For active incidents: last 1-6 hours
+        - For post-incident analysis: 24-48 hours
+        - For trend analysis: 7-30 days
+      </description>
+    </practice>
+
+    <practice>
+      <title>Correlate multiple data sources</title>
+      <description>
+        Don't rely on a single metric. Cross-reference:
+        - Error rates with latency
+        - Application metrics with infrastructure metrics
+        - Instana events with deployment changes
+      </description>
+    </practice>
+
+    <practice>
+      <title>Use filters effectively</title>
+      <description>
+        Apply tag filters to focus on specific:
+        - Applications or services
+        - Environments (prod, staging)
+        - Regions or availability zones
+        - Specific hosts or pods
+      </description>
+    </practice>
+
+    <practice>
+      <title>Leverage grouping for aggregation</title>
+      <description>
+        Group metrics by relevant dimensions:
+        - service.name for service-level analysis
+        - endpoint.name for endpoint-level analysis
+        - host.name for infrastructure analysis
+        - kubernetes.namespace.name for namespace analysis
+      </description>
+    </practice>
+
+    <practice>
+      <title>Check SLO compliance</title>
+      <description>
+        If SLOs are configured, check error budget status to understand
+        the severity and business impact of the incident
+      </description>
+    </practice>
+  </best_practices>
+
+  <troubleshooting>
+    <issue name="no_data_returned">
+      <possible_causes>
+        <cause>Incorrect time range (too narrow or in the future)</cause>
+        <cause>Wrong tag filter (typo in service/application name)</cause>
+        <cause>Entity type doesn't exist in environment</cause>
+        <cause>Insufficient permissions</cause>
+      </possible_causes>
+      <solutions>
+        <solution>Verify time range is in the past and covers incident window</solution>
+        <solution>Use catalog operations to get valid tag names</solution>
+        <solution>Check entity type spelling against schema</solution>
+      </solutions>
+    </issue>
+
+    <issue name="too_much_data">
+      <possible_causes>
+        <cause>Time window too large</cause>
+        <cause>No filters applied</cause>
+        <cause>Querying high-cardinality metrics</cause>
+      </possible_causes>
+      <solutions>
+        <solution>Narrow time window to incident timeframe</solution>
+        <solution>Apply tag filters to focus on affected components</solution>
+        <solution>Use max_events parameter to limit results</solution>
+      </solutions>
+    </issue>
+
+    <issue name="metric_not_available">
+      <possible_causes>
+        <cause>Metric name typo</cause>
+        <cause>Metric not collected for this entity type</cause>
+        <cause>Agent not configured to collect metric</cause>
+      </possible_causes>
+      <solutions>
+        <solution>Use get_metric_catalog to see available metrics</solution>
+        <solution>Check entity type supports the metric</solution>
+        <solution>Verify agent configuration and version</solution>
+      </solutions>
+    </issue>
+  </troubleshooting>
+</instana_analysis_guide>
+
+<!-- Made with Bob -->

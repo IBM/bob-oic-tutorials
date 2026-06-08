@@ -1,0 +1,654 @@
+<rca_reporting_template>
+  <overview>
+    Comprehensive template for creating Root Cause Analysis (RCA) reports that
+    document incident investigations. This template ensures all critical information
+    is captured in a clear, actionable format for stakeholders, engineering teams,
+    and future reference.
+  </overview>
+
+  <report_structure>
+    <section name="executive_summary">
+      <purpose>
+        Provide a concise overview for stakeholders who need to understand the
+        incident without technical details
+      </purpose>
+      <content_guidelines>
+        <guideline>Keep to 3-5 sentences maximum</guideline>
+        <guideline>State what happened, when, impact, and root cause</guideline>
+        <guideline>Avoid technical jargon</guideline>
+        <guideline>Focus on business impact and resolution</guideline>
+      </content_guidelines>
+      <template><![CDATA[
+## Executive Summary
+
+On [DATE] at [TIME], [SERVICE/APPLICATION] experienced [INCIDENT TYPE] that 
+resulted in [IMPACT]. The incident lasted [DURATION] and affected [SCOPE]. 
+The root cause was identified as [ROOT CAUSE IN SIMPLE TERMS]. The issue has 
+been resolved by [RESOLUTION], and preventive measures have been implemented 
+to avoid recurrence.
+      ]]></template>
+      <example><![CDATA[
+## Executive Summary
+
+On March 15, 2026 at 14:23 UTC, the Payment Service experienced intermittent 
+failures that resulted in 15% of payment transactions failing. The incident 
+lasted 2 hours and 17 minutes, affecting approximately 3,500 customers. The 
+root cause was identified as a memory leak in the user session cache causing 
+pods to crash. The issue has been resolved by implementing cache eviction 
+policies, and monitoring has been enhanced to detect similar issues early.
+      ]]></example>
+    </section>
+
+    <section name="incident_details">
+      <purpose>
+        Provide factual information about the incident timeline and scope
+      </purpose>
+      <subsections>
+        <subsection name="timeline">
+          <description>Chronological sequence of events</description>
+          <format>
+            Use table format with columns: Time (UTC), Event, Source
+          </format>
+          <template><![CDATA[
+## Incident Timeline
+
+| Time (UTC) | Event | Source |
+|------------|-------|--------|
+| 14:23:15 | First error spike detected | Instana Alert |
+| 14:25:30 | Payment service pod payment-svc-7d8f9c-xk2lp OOMKilled | OpenShift Events |
+| 14:25:45 | Pod restarted, service temporarily recovered | OpenShift |
+| 14:38:20 | Second pod payment-svc-7d8f9c-mn4pq OOMKilled | OpenShift Events |
+| 14:40:00 | All pods in CrashLoopBackOff, service down | OpenShift |
+| 15:15:00 | Investigation identified memory leak in cache | Code Analysis |
+| 16:20:00 | Fix deployed with cache eviction policy | Deployment |
+| 16:40:00 | Service fully recovered, no further errors | Instana Metrics |
+          ]]></template>
+        </subsection>
+
+        <subsection name="impact_assessment">
+          <description>Quantify the business and technical impact</description>
+          <metrics_to_include>
+            <metric>Duration of incident</metric>
+            <metric>Number of affected users/requests</metric>
+            <metric>Error rate during incident</metric>
+            <metric>Services/components affected</metric>
+            <metric>Revenue impact (if applicable)</metric>
+            <metric>SLO/SLA impact</metric>
+          </metrics_to_include>
+          <template><![CDATA[
+## Impact Assessment
+
+**Duration:** 2 hours 17 minutes (14:23 - 16:40 UTC)
+
+**Affected Services:**
+- Payment Service (complete outage for 25 minutes)
+- Order Processing (degraded performance)
+
+**User Impact:**
+- Approximately 3,500 customers affected
+- 15% of payment transactions failed (523 out of 3,487)
+- Average latency increased from 200ms to 2,500ms
+
+**Business Impact:**
+- Estimated $45,000 in failed transactions
+- 127 customer support tickets created
+- SLO breach: 99.9% availability target missed (actual: 98.7%)
+
+**Technical Impact:**
+- 3 pods OOMKilled and restarted
+- 15 pod restarts total during incident
+- Database connection pool temporarily exhausted
+          ]]></template>
+        </subsection>
+
+        <subsection name="detection_and_response">
+          <description>How the incident was detected and initial response</description>
+          <template><![CDATA[
+## Detection and Response
+
+**Detection:**
+- Incident detected by Instana alert "High Error Rate - Payment Service" at 14:23:15 UTC
+- Alert triggered when error rate exceeded 5% threshold
+- On-call engineer paged via PagerDuty at 14:23:30 UTC
+
+**Initial Response:**
+- On-call engineer acknowledged alert at 14:24:00 UTC
+- Checked Instana dashboard for error patterns
+- Identified pod crashes in OpenShift
+- Escalated to platform team at 14:35:00 UTC
+- War room established at 14:45:00 UTC
+
+**Response Time:**
+- Time to detection: < 1 minute (automated)
+- Time to acknowledgment: 45 seconds
+- Time to mitigation: 1 hour 57 minutes
+- Time to resolution: 2 hours 17 minutes
+          ]]></template>
+        </subsection>
+      </subsections>
+    </section>
+
+    <section name="root_cause_analysis">
+      <purpose>
+        Provide detailed technical analysis of the root cause
+      </purpose>
+      <subsections>
+        <subsection name="symptoms_observed">
+          <description>Document all symptoms identified during investigation</description>
+          <template><![CDATA[
+## Symptoms Observed
+
+### Instana Observations
+- Error rate spiked from 0.1% to 15% at 14:23:15 UTC
+- Latency P99 increased from 500ms to 8,000ms
+- Heap memory usage showed steady increase over 6 hours before crash
+- GC pause times increased from 50ms to 2,000ms
+- Traces showed "OutOfMemoryError: Java heap space" in multiple spans
+
+### OpenShift Observations
+- Pods terminated with Exit Code 137 (OOMKilled)
+- Pod events showed "Killing container with id docker://abc123 due to OOMKilled"
+- Memory usage at 100% of limit (2Gi) before crashes
+- 15 pod restarts across 3 replicas
+- No CPU throttling observed
+
+### Application Logs
+```
+2026-03-15 14:25:29.847 ERROR [payment-service] OutOfMemoryError: Java heap space
+2026-03-15 14:25:29.848 ERROR [payment-service] at java.util.HashMap.resize(HashMap.java:704)
+2026-03-15 14:25:29.849 ERROR [payment-service] at com.example.UserSessionCache.put(UserSessionCache.java:45)
+```
+          ]]></template>
+        </subsection>
+
+        <subsection name="investigation_process">
+          <description>Document the investigation steps and hypotheses considered</description>
+          <template><![CDATA[
+## Investigation Process
+
+### Hypotheses Considered
+
+**Hypothesis 1: Memory leak in application code**
+- Supporting Evidence:
+  - Heap usage steadily increasing over time in Instana
+  - OOMKilled pods with Exit Code 137
+  - No memory leak in previous version
+- Contradicting Evidence: None
+- Conclusion: **CONFIRMED** - Root cause identified
+
+**Hypothesis 2: Insufficient memory limits**
+- Supporting Evidence:
+  - Pods hitting memory limit
+- Contradicting Evidence:
+  - Memory limit (2Gi) was adequate for previous versions
+  - Heap usage pattern shows leak, not just high usage
+- Conclusion: **REFUTED** - Symptom, not root cause
+
+**Hypothesis 3: External service causing memory pressure**
+- Supporting Evidence: None
+- Contradicting Evidence:
+  - External service response times normal
+  - No correlation with external service calls
+- Conclusion: **REFUTED** - No evidence
+
+### Investigation Steps
+1. Analyzed Instana metrics showing heap growth pattern
+2. Examined OpenShift pod events confirming OOMKills
+3. Retrieved pod logs showing OutOfMemoryError stack traces
+4. Analyzed heap dump (obtained before crash) showing 1.8GB of UserSession objects
+5. Reviewed code changes in recent deployment
+6. Identified unbounded HashMap in UserSessionCache.java added in v2.3.0
+7. Confirmed cache had no eviction policy or size limit
+          ]]></template>
+        </subsection>
+
+        <subsection name="root_cause">
+          <description>State the root cause clearly with supporting evidence</description>
+          <template><![CDATA[
+## Root Cause
+
+**Root Cause:** Unbounded cache in UserSessionCache causing memory leak
+
+**Location:** `src/main/java/com/example/cache/UserSessionCache.java:45`
+
+**Defect Description:**
+The UserSessionCache class uses an unbounded HashMap to store user session objects. 
+The cache was introduced in version 2.3.0 (deployed March 15, 2026 at 08:00 UTC) 
+to improve performance by caching user session data. However, the implementation 
+lacks any eviction policy or size limit.
+
+**Problematic Code:**
+```java
+public class UserSessionCache {
+    private static final Map<String, UserSession> cache = new HashMap<>();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);  // No eviction, grows unbounded
+    }
+    
+    public UserSession get(String userId) {
+        return cache.get(userId);
+    }
+}
+```
+
+**Causal Chain:**
+1. UserSessionCache accumulates UserSession objects for every unique user login
+2. Each UserSession object is approximately 2KB in size
+3. Cache never evicts entries, growing indefinitely
+4. After ~900,000 unique user logins (over 6 hours), heap exhausted
+5. JVM throws OutOfMemoryError
+6. Pod killed by Kubernetes with OOMKilled status
+7. Pod restarts, temporarily resolving issue
+8. Pattern repeats, causing recurring outages
+
+**Evidence:**
+- Heap dump analysis showed 1.8GB (90% of heap) consumed by HashMap entries
+- 897,432 UserSession objects in cache at time of crash
+- Code review confirmed no eviction policy in UserSessionCache
+- Git history shows cache added in commit abc123 on March 14, 2026
+- No similar issues in version 2.2.0 (before cache was added)
+          ]]></template>
+        </subsection>
+
+        <subsection name="contributing_factors">
+          <description>Identify factors that contributed to or exacerbated the issue</description>
+          <template><![CDATA[
+## Contributing Factors
+
+While the root cause was the unbounded cache, several factors contributed to 
+the severity and duration of the incident:
+
+1. **Insufficient Code Review**
+   - Cache implementation not reviewed for memory management
+   - No discussion of eviction policy in pull request
+
+2. **Missing Monitoring**
+   - No alerts on heap usage trends
+   - Cache size not exposed as metric
+   - No heap dump collection on OOMKill
+
+3. **Inadequate Testing**
+   - Load testing did not run long enough to expose leak
+   - No memory leak detection in CI/CD pipeline
+   - Performance tests only ran for 30 minutes (leak takes 6+ hours)
+
+4. **Deployment Timing**
+   - Deployed during business hours
+   - No gradual rollout (canary deployment)
+   - All pods updated simultaneously
+
+5. **Delayed Detection**
+   - Heap growth was gradual (6 hours to failure)
+   - No proactive monitoring of heap trends
+   - First alert only triggered after errors started
+          ]]></template>
+        </subsection>
+      </subsections>
+    </section>
+
+    <section name="resolution">
+      <purpose>
+        Document how the issue was resolved
+      </purpose>
+      <template><![CDATA[
+## Resolution
+
+### Immediate Fix (Deployed 16:20 UTC)
+
+Modified UserSessionCache to use Guava Cache with eviction policy:
+
+```java
+public class UserSessionCache {
+    private static final Cache<String, UserSession> cache = CacheBuilder.newBuilder()
+        .maximumSize(10000)  // Limit to 10,000 entries
+        .expireAfterWrite(1, TimeUnit.HOURS)  // Expire after 1 hour
+        .expireAfterAccess(30, TimeUnit.MINUTES)  // Expire if not accessed
+        .recordStats()  // Enable cache statistics
+        .build();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);
+    }
+    
+    public UserSession get(String userId) {
+        return cache.getIfPresent(userId);
+    }
+}
+```
+
+**Changes Made:**
+- Replaced HashMap with Guava Cache
+- Added maximum size limit (10,000 entries)
+- Added time-based eviction (1 hour write, 30 min access)
+- Enabled cache statistics for monitoring
+
+**Deployment:**
+- Fix deployed as hotfix version 2.3.1
+- Gradual rollout: 1 pod → 2 pods → all pods
+- Monitored heap usage during rollout
+- Confirmed stable memory usage after deployment
+
+### Verification
+
+Post-deployment metrics (16:40 - 18:00 UTC):
+- Heap usage stable at 45% (900MB of 2GB)
+- No pod restarts
+- Error rate returned to baseline (0.1%)
+- Latency P99 returned to 500ms
+- Cache hit rate: 87%
+- Cache evictions: ~100 per minute (expected)
+      ]]></template>
+    </section>
+
+    <section name="preventive_measures">
+      <purpose>
+        Document actions to prevent recurrence and improve processes
+      </purpose>
+      <categories>
+        <category name="immediate_actions">
+          <description>Actions taken immediately to prevent recurrence</description>
+          <template><![CDATA[
+## Preventive Measures
+
+### Immediate Actions (Completed)
+
+1. **Enhanced Monitoring**
+   - Added Instana alert for heap usage > 70% for 10 minutes
+   - Exposed cache metrics (size, hit rate, evictions) to Prometheus
+   - Created dashboard for cache monitoring
+   - Configured heap dump collection on OOMKill
+
+2. **Code Review**
+   - Reviewed all other cache implementations in codebase
+   - Identified 3 other unbounded caches, created tickets to fix
+   - Updated code review checklist to include cache eviction policies
+
+3. **Documentation**
+   - Documented cache best practices in engineering wiki
+   - Added cache implementation guidelines to coding standards
+   - Created runbook for memory leak investigation
+          ]]></template>
+        </category>
+
+        <category name="short_term_actions">
+          <description>Actions to be completed within 1-2 weeks</description>
+          <template><![CDATA[
+### Short-term Actions (1-2 weeks)
+
+1. **Testing Improvements**
+   - Extend load testing duration to 12 hours minimum
+   - Add memory leak detection to CI/CD pipeline
+   - Implement automated heap dump analysis
+   - Add cache-specific performance tests
+
+2. **Deployment Process**
+   - Implement mandatory canary deployments for production
+   - Add automated rollback on error rate increase
+   - Require deployment during off-peak hours for high-risk changes
+
+3. **Monitoring Enhancements**
+   - Add proactive alerts for heap growth trends
+   - Implement anomaly detection for memory usage
+   - Create SLO for memory usage stability
+          ]]></template>
+        </category>
+
+        <category name="long_term_actions">
+          <description>Strategic improvements for long-term prevention</description>
+          <template><![CDATA[
+### Long-term Actions (1-3 months)
+
+1. **Architecture Review**
+   - Evaluate distributed caching solution (Redis, Memcached)
+   - Design cache strategy for microservices
+   - Implement cache warming strategies
+
+2. **Process Improvements**
+   - Establish memory management review board
+   - Create cache design review process
+   - Implement regular memory profiling in production
+
+3. **Training**
+   - Conduct training on memory management best practices
+   - Share RCA findings in engineering all-hands
+   - Create cache implementation workshop
+
+4. **Tooling**
+   - Implement automated cache configuration validation
+   - Create cache sizing calculator tool
+   - Build cache monitoring dashboard template
+          ]]></template>
+        </category>
+      </categories>
+    </section>
+
+    <section name="lessons_learned">
+      <purpose>
+        Capture key learnings for the organization
+      </purpose>
+      <template><![CDATA[
+## Lessons Learned
+
+### What Went Well
+
+1. **Rapid Detection**
+   - Automated monitoring detected issue within 1 minute
+   - Alert routing worked correctly
+
+2. **Effective Collaboration**
+   - War room established quickly
+   - Cross-team collaboration (SRE, Dev, Platform)
+   - Clear communication with stakeholders
+
+3. **Systematic Investigation**
+   - Followed structured RCA process
+   - Gathered evidence from multiple sources
+   - Validated root cause before implementing fix
+
+### What Could Be Improved
+
+1. **Prevention**
+   - Cache implementation should have been reviewed more thoroughly
+   - Load testing duration was insufficient
+   - No proactive heap monitoring
+
+2. **Detection**
+   - Should have detected heap growth trend before OOMKills
+   - Need better visibility into cache behavior
+
+3. **Response**
+   - Took too long to identify root cause (1h 52m)
+   - Could have used heap dumps earlier in investigation
+   - Rollback strategy not clearly defined
+
+### Key Takeaways
+
+1. **Always implement eviction policies for caches**
+   - Never use unbounded collections for caching
+   - Consider size limits, time-based eviction, and LRU policies
+   - Monitor cache metrics (size, hit rate, evictions)
+
+2. **Extend load testing duration**
+   - Memory leaks may take hours to manifest
+   - Test for at least 12 hours under realistic load
+   - Monitor memory trends during testing
+
+3. **Proactive monitoring is critical**
+   - Don't wait for failures to alert
+   - Monitor trends and anomalies
+   - Alert on concerning patterns before they cause outages
+
+4. **Code review must include resource management**
+   - Review all cache implementations
+   - Check for resource leaks (connections, memory, threads)
+   - Validate configuration (limits, timeouts, pool sizes)
+      ]]></template>
+    </section>
+
+    <section name="action_items">
+      <purpose>
+        Track specific follow-up actions with owners and deadlines
+      </purpose>
+      <template><![CDATA[
+## Action Items
+
+| # | Action | Owner | Deadline | Status |
+|---|--------|-------|----------|--------|
+| 1 | Fix 3 other unbounded caches identified | Dev Team | March 22 | In Progress |
+| 2 | Implement heap usage alerts | SRE Team | March 18 | Complete |
+| 3 | Extend load testing to 12 hours | QA Team | March 25 | Not Started |
+| 4 | Add memory leak detection to CI/CD | Platform Team | March 29 | In Progress |
+| 5 | Create cache implementation guidelines | Tech Lead | March 20 | Complete |
+| 6 | Implement canary deployment process | Platform Team | April 5 | Not Started |
+| 7 | Conduct memory management training | Engineering Manager | April 15 | Not Started |
+| 8 | Evaluate distributed caching solution | Architecture Team | May 30 | Not Started |
+      ]]></template>
+    </section>
+
+    <section name="appendices">
+      <purpose>
+        Include supporting documentation and references
+      </purpose>
+      <subsections>
+        <subsection name="references">
+          <template><![CDATA[
+## Appendices
+
+### A. References
+
+- Incident Ticket: INC-2026-0315-001
+- Instana Incident: https://instana.example.com/incidents/abc123
+- OpenShift Namespace: production/payment-service
+- Git Commit (Root Cause): abc123def456
+- Git Commit (Fix): def456abc789
+- Heap Dump Analysis: https://wiki.example.com/heap-dump-2026-03-15
+- War Room Notes: https://docs.example.com/war-room-2026-03-15
+          ]]></template>
+        </subsection>
+
+        <subsection name="metrics_and_graphs">
+          <template><![CDATA[
+### B. Key Metrics and Graphs
+
+**Heap Usage Over Time:**
+[Include graph showing heap growth from 08:00 to 14:25]
+
+**Error Rate During Incident:**
+[Include graph showing error rate spike]
+
+**Pod Restart Timeline:**
+[Include graph showing pod restarts]
+
+**Cache Size Growth:**
+[Include graph showing cache entry count over time]
+          ]]></template>
+        </subsection>
+
+        <subsection name="code_snippets">
+          <template><![CDATA[
+### C. Detailed Code Analysis
+
+**Before (Problematic Code):**
+```java
+// File: src/main/java/com/example/cache/UserSessionCache.java
+// Lines: 15-30
+// Commit: abc123def456
+
+public class UserSessionCache {
+    private static final Map<String, UserSession> cache = new HashMap<>();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);
+    }
+    
+    public UserSession get(String userId) {
+        return cache.get(userId);
+    }
+    
+    public int size() {
+        return cache.size();
+    }
+}
+```
+
+**After (Fixed Code):**
+```java
+// File: src/main/java/com/example/cache/UserSessionCache.java
+// Lines: 15-40
+// Commit: def456abc789
+
+public class UserSessionCache {
+    private static final Cache<String, UserSession> cache = CacheBuilder.newBuilder()
+        .maximumSize(10000)
+        .expireAfterWrite(1, TimeUnit.HOURS)
+        .expireAfterAccess(30, TimeUnit.MINUTES)
+        .recordStats()
+        .build();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);
+    }
+    
+    public UserSession get(String userId) {
+        return cache.getIfPresent(userId);
+    }
+    
+    public CacheStats getStats() {
+        return cache.stats();
+    }
+}
+```
+          ]]></template>
+        </subsection>
+      </subsections>
+    </section>
+  </report_structure>
+
+  <formatting_guidelines>
+    <guideline name="use_markdown">
+      <description>Format reports in Markdown for readability and version control</description>
+    </guideline>
+
+    <guideline name="include_timestamps">
+      <description>Always use UTC timestamps in ISO 8601 format or clearly labeled timezone</description>
+    </guideline>
+
+    <guideline name="cite_sources">
+      <description>Link to Instana dashboards, OpenShift resources, code commits, etc.</description>
+    </guideline>
+
+    <guideline name="use_code_blocks">
+      <description>Format code snippets with syntax highlighting</description>
+    </guideline>
+
+    <guideline name="include_visuals">
+      <description>Add graphs, charts, and diagrams where helpful</description>
+    </guideline>
+
+    <guideline name="be_specific">
+      <description>Use exact values, not approximations (e.g., "15.3%" not "about 15%")</description>
+    </guideline>
+
+    <guideline name="maintain_objectivity">
+      <description>Focus on facts and evidence, avoid blame or speculation</description>
+    </guideline>
+  </formatting_guidelines>
+
+  <report_filename_convention>
+    <format>RCA-YYYY-MM-DD-[service-name]-[brief-description].md</format>
+    <examples>
+      <example>RCA-2026-03-15-payment-service-memory-leak.md</example>
+      <example>RCA-2026-03-20-order-api-database-timeout.md</example>
+      <example>RCA-2026-04-01-user-service-pod-crashes.md</example>
+    </examples>
+  </report_filename_convention>
+
+  <storage_location>
+    <primary>docs/incident-reports/ or incident-reports/ in repository</primary>
+    <backup>Shared documentation system (Confluence, Wiki, etc.)</backup>
+    <retention>Retain indefinitely for historical reference and pattern analysis</retention>
+  </storage_location>
+</rca_reporting_template>
+
+<!-- Made with Bob -->

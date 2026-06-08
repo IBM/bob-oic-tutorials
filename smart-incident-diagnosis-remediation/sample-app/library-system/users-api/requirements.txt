@@ -1,0 +1,5 @@
+Flask==3.0.0
+flask-cors==4.0.0
+pymongo==4.6.0
+gunicorn==21.2.0
+instana==3.0.0

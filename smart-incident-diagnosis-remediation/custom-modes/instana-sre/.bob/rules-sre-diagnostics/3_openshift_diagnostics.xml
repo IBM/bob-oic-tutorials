@@ -1,0 +1,880 @@
+<openshift_diagnostics_guide>
+  <overview>
+    Comprehensive guide for using OpenShift CLI (oc) commands to investigate cluster
+    state, diagnose infrastructure issues, and correlate cluster events with application
+    performance problems identified in Instana. This guide covers systematic approaches
+    to pod troubleshooting, resource analysis, and configuration validation.
+    
+    CRITICAL USAGE RESTRICTION:
+    OpenShift commands should ONLY be used when performing ROOT CAUSE ANALYSIS.
+    
+    When to use OpenShift diagnostics:
+    - User explicitly asks to "analyze root cause" or "investigate incident"
+    - Correlating infrastructure state with Instana findings during RCA
+    - Investigating pod crashes, OOMKills, or deployment issues as part of RCA
+    
+    When NOT to use OpenShift diagnostics:
+    - User asks for metrics → Use Instana (manage_applications, analyze_infrastructure)
+    - User asks for services → Use Instana (manage_applications with resource_type="metrics")
+    - User asks for application data → Use Instana MCP tools
+    - General queries about system state → Use Instana first
+    
+    The workflow is: Instana identifies symptoms → OpenShift correlates infrastructure state
+  </overview>
+
+  <command_categories>
+    <category name="pod_health_investigation">
+      <description>Commands to assess pod status, lifecycle, and health</description>
+      
+      <command name="list_pods">
+        <syntax>oc get pods -n [namespace] -o wide</syntax>
+        <purpose>Get overview of all pods with status, restarts, and node placement</purpose>
+        <key_columns>
+          <column name="NAME">Pod name</column>
+          <column name="READY">Containers ready vs total (e.g., 1/1)</column>
+          <column name="STATUS">Running, Pending, CrashLoopBackOff, Error, etc.</column>
+          <column name="RESTARTS">Number of container restarts (high = problem)</column>
+          <column name="AGE">How long pod has been running</column>
+          <column name="IP">Pod IP address</column>
+          <column name="NODE">Which node the pod is running on</column>
+        </key_columns>
+        <red_flags>
+          <flag>RESTARTS > 0 (especially if increasing)</flag>
+          <flag>STATUS: CrashLoopBackOff, Error, ImagePullBackOff</flag>
+          <flag>READY: 0/1 or not all containers ready</flag>
+          <flag>STATUS: Pending for extended time</flag>
+        </red_flags>
+        <example><![CDATA[
+<execute_command>
+<command>oc get pods -n production -o wide</command>
+</execute_command>
+        ]]></example>
+      </command>
+
+      <command name="describe_pod">
+        <syntax>oc describe pod [pod-name] -n [namespace]</syntax>
+        <purpose>Get detailed pod information including events, conditions, and container states</purpose>
+        <critical_sections>
+          <section name="Events">
+            <description>Recent events affecting the pod (last hour by default)</description>
+            <look_for>
+              - FailedScheduling: Resource constraints, node selector issues
+              - Unhealthy: Failed liveness/readiness probes
+              - BackOff: Container startup failures
+              - Killing: Pod termination events
+              - FailedMount: Volume mounting issues
+              - FailedAttachVolume: PVC attachment problems
+            </look_for>
+          </section>
+          <section name="Conditions">
+            <description>Pod lifecycle conditions (PodScheduled, Initialized, Ready, ContainersReady)</description>
+            <look_for>
+              - Ready: False (pod not ready to serve traffic)
+              - ContainersReady: False (containers not healthy)
+              - Reason and Message fields explain why
+            </look_for>
+          </section>
+          <section name="Container States">
+            <description>Current state of each container (Running, Waiting, Terminated)</description>
+            <look_for>
+              - State: Waiting with Reason: CrashLoopBackOff
+              - Last State: Terminated with Exit Code (non-zero = error)
+              - Exit Code 137: OOMKilled (out of memory)
+              - Exit Code 1: General application error
+            </look_for>
+          </section>
+          <section name="Resource Requests/Limits">
+            <description>CPU and memory requests and limits</description>
+            <look_for>
+              - Limits too low (causing OOMKills)
+              - Requests too high (causing scheduling issues)
+              - No limits set (risk of resource exhaustion)
+            </look_for>
+          </section>
+        </critical_sections>
+        <example><![CDATA[
+<execute_command>
+<command>oc describe pod payment-service-7d8f9c-xk2lp -n production</command>
+</execute_command>
+        ]]></example>
+      </command>
+
+      <command name="get_pod_yaml">
+        <syntax>oc get pod [pod-name] -n [namespace] -o yaml</syntax>
+        <purpose>Get complete pod specification in YAML format</purpose>
+        <when_to_use>
+          When you need to examine:
+          - Environment variables and their sources
+          - Volume mounts and configurations
+          - Security context settings
+          - Init containers
+          - Annotations and labels
+        </when_to_use>
+      </command>
+
+      <command name="list_pods_by_label">
+        <syntax>oc get pods -n [namespace] -l [label-selector]</syntax>
+        <purpose>Filter pods by labels (e.g., app=payment-service)</purpose>
+        <examples>
+          <example>oc get pods -n production -l app=payment-service</example>
+          <example>oc get pods -n production -l version=v2.1.0</example>
+          <example>oc get pods -n production -l app=payment-service,version=v2.1.0</example>
+        </examples>
+      </command>
+    </category>
+
+    <category name="log_analysis">
+      <description>Commands to retrieve and analyze container logs</description>
+
+      <command name="get_logs">
+        <syntax>oc logs [pod-name] -n [namespace]</syntax>
+        <purpose>Get logs from a pod's container</purpose>
+        <options>
+          <option name="--tail=N">Show last N lines (e.g., --tail=500)</option>
+          <option name="--since=TIME">Show logs since time (e.g., --since=1h, --since=30m)</option>
+          <option name="--previous">Show logs from previous container instance (after crash)</option>
+          <option name="-c [container]">Specify container name (for multi-container pods)</option>
+          <option name="-f">Follow logs in real-time (stream)</option>
+          <option name="--timestamps">Include timestamps in output</option>
+        </options>
+        <log_analysis_patterns>
+          <pattern name="error_detection">
+            <search_for>
+              - ERROR, FATAL, SEVERE keywords
+              - Exception stack traces
+              - "Connection refused", "Timeout", "Unable to connect"
+              - "OutOfMemoryError", "StackOverflowError"
+              - HTTP 5xx status codes
+            </search_for>
+          </pattern>
+          <pattern name="performance_issues">
+            <search_for>
+              - Slow query warnings
+              - Thread pool exhaustion messages
+              - GC pause time warnings
+              - Connection pool exhaustion
+              - Circuit breaker state changes
+            </search_for>
+          </pattern>
+          <pattern name="configuration_errors">
+            <search_for>
+              - "Configuration error", "Invalid configuration"
+              - Missing environment variables
+              - Failed to load properties/config files
+              - Authentication/authorization failures
+            </search_for>
+          </pattern>
+        </log_analysis_patterns>
+        <examples>
+          <example description="Get last 500 lines">
+            <![CDATA[
+<execute_command>
+<command>oc logs payment-service-7d8f9c-xk2lp -n production --tail=500</command>
+</execute_command>
+            ]]>
+          </example>
+          <example description="Get logs from crashed container">
+            <![CDATA[
+<execute_command>
+<command>oc logs payment-service-7d8f9c-xk2lp -n production --previous</command>
+</execute_command>
+            ]]>
+          </example>
+          <example description="Get logs from last hour with timestamps">
+            <![CDATA[
+<execute_command>
+<command>oc logs payment-service-7d8f9c-xk2lp -n production --since=1h --timestamps</command>
+</execute_command>
+            ]]>
+          </example>
+        </examples>
+      </command>
+
+      <command name="logs_from_all_pods">
+        <syntax>oc logs -l [label-selector] -n [namespace]</syntax>
+        <purpose>Get logs from all pods matching a label selector</purpose>
+        <use_case>
+          Useful when investigating issues across multiple replicas of a service
+        </use_case>
+        <example><![CDATA[
+<execute_command>
+<command>oc logs -l app=payment-service -n production --tail=100</command>
+</execute_command>
+        ]]></example>
+      </command>
+    </category>
+
+    <category name="event_investigation">
+      <description>Commands to examine cluster events and changes</description>
+
+      <command name="get_events">
+        <syntax>oc get events -n [namespace]</syntax>
+        <purpose>List recent events in the namespace</purpose>
+        <options>
+          <option name="--sort-by='.lastTimestamp'">Sort by most recent first</option>
+          <option name="--field-selector">Filter by fields (e.g., involvedObject.name=pod-name)</option>
+          <option name="-w">Watch for new events in real-time</option>
+        </options>
+        <critical_event_types>
+          <event type="FailedScheduling">
+            <reason>Insufficient CPU/memory, node selector mismatch, taints/tolerations</reason>
+            <action>Check node resources and pod resource requests</action>
+          </event>
+          <event type="Unhealthy">
+            <reason>Failed liveness or readiness probe</reason>
+            <action>Check probe configuration and application health endpoint</action>
+          </event>
+          <event type="BackOff">
+            <reason>Container failed to start, crashing repeatedly</reason>
+            <action>Check container logs and exit codes</action>
+          </event>
+          <event type="FailedMount">
+            <reason>Unable to mount volume (PVC not bound, wrong permissions)</reason>
+            <action>Check PVC status and storage class</action>
+          </event>
+          <event type="Killing">
+            <reason>Pod being terminated (could be OOMKilled)</reason>
+            <action>Check if reason is OOMKilled, review memory limits</action>
+          </event>
+        </critical_event_types>
+        <example><![CDATA[
+<execute_command>
+<command>oc get events -n production --sort-by='.lastTimestamp' | tail -50</command>
+</execute_command>
+        ]]></example>
+      </command>
+
+      <command name="events_for_pod">
+        <syntax>oc get events -n [namespace] --field-selector involvedObject.name=[pod-name]</syntax>
+        <purpose>Get events specific to a particular pod</purpose>
+        <example><![CDATA[
+<execute_command>
+<command>oc get events -n production --field-selector involvedObject.name=payment-service-7d8f9c-xk2lp</command>
+</execute_command>
+        ]]></example>
+      </command>
+    </category>
+
+    <category name="resource_utilization">
+      <description>Commands to check CPU, memory, and resource usage</description>
+
+      <command name="top_pods">
+        <syntax>oc top pods -n [namespace]</syntax>
+        <purpose>Show current CPU and memory usage for pods</purpose>
+        <interpretation>
+          <metric name="CPU">
+            - Compare to CPU requests/limits
+            - High CPU (near limit) = potential throttling
+            - Consistently high = may need more resources
+          </metric>
+          <metric name="MEMORY">
+            - Compare to memory requests/limits
+            - Near limit = risk of OOMKill
+            - Steadily increasing = potential memory leak
+          </metric>
+        </interpretation>
+        <options>
+          <option name="--containers">Show per-container metrics</option>
+          <option name="--sort-by=cpu">Sort by CPU usage</option>
+          <option name="--sort-by=memory">Sort by memory usage</option>
+        </options>
+        <example><![CDATA[
+<execute_command>
+<command>oc top pods -n production --sort-by=memory</command>
+</execute_command>
+        ]]></example>
+      </command>
+
+      <command name="top_nodes">
+        <syntax>oc top nodes</syntax>
+        <purpose>Show current CPU and memory usage for nodes</purpose>
+        <interpretation>
+          - High CPU/memory percentage = node under pressure
+          - May cause pod evictions or scheduling issues
+          - Check if specific nodes are overloaded
+        </interpretation>
+        <example><![CDATA[
+<execute_command>
+<command>oc top nodes</command>
+</execute_command>
+        ]]></example>
+      </command>
+
+      <command name="describe_node">
+        <syntax>oc describe node [node-name]</syntax>
+        <purpose>Get detailed node information including capacity, allocatable resources, and conditions</purpose>
+        <critical_sections>
+          <section name="Conditions">
+            <look_for>
+              - MemoryPressure: True (node running out of memory)
+              - DiskPressure: True (node running out of disk space)
+              - PIDPressure: True (too many processes)
+              - Ready: False (node not healthy)
+            </look_for>
+          </section>
+          <section name="Allocated resources">
+            <look_for>
+              - CPU/Memory requests as percentage of capacity
+              - High allocation (>80%) = scheduling constraints
+            </look_for>
+          </section>
+          <section name="Non-terminated Pods">
+            <look_for>
+              - List of pods running on the node
+              - Resource usage per pod
+            </look_for>
+          </section>
+        </critical_sections>
+      </command>
+    </category>
+
+    <category name="deployment_investigation">
+      <description>Commands to examine deployments, replica sets, and rollout status</description>
+
+      <command name="get_deployments">
+        <syntax>oc get deployments -n [namespace]</syntax>
+        <purpose>List deployments and their replica status</purpose>
+        <key_columns>
+          <column name="READY">Ready replicas vs desired (e.g., 3/3)</column>
+          <column name="UP-TO-DATE">Replicas at latest version</column>
+          <column name="AVAILABLE">Replicas passing readiness checks</column>
+        </key_columns>
+        <red_flags>
+          <flag>READY not matching desired count</flag>
+          <flag>UP-TO-DATE less than desired (rollout in progress or stuck)</flag>
+          <flag>AVAILABLE = 0 (service completely down)</flag>
+        </red_flags>
+      </command>
+
+      <command name="describe_deployment">
+        <syntax>oc describe deployment [deployment-name] -n [namespace]</syntax>
+        <purpose>Get detailed deployment information including strategy, conditions, and events</purpose>
+        <critical_sections>
+          <section name="Replicas">
+            <look_for>
+              - Desired vs current vs available
+              - Mismatch indicates scaling or rollout issues
+            </look_for>
+          </section>
+          <section name="Conditions">
+            <look_for>
+              - Progressing: False (rollout stuck)
+              - Available: False (no healthy replicas)
+              - ReplicaFailure: True (unable to create replicas)
+            </look_for>
+          </section>
+          <section name="Events">
+            <look_for>
+              - ScalingReplicaSet events
+              - FailedCreate events
+              - Rollout progress messages
+            </look_for>
+          </section>
+        </critical_sections>
+      </command>
+
+      <command name="rollout_status">
+        <syntax>oc rollout status deployment/[deployment-name] -n [namespace]</syntax>
+        <purpose>Check the status of a deployment rollout</purpose>
+        <interpretation>
+          - "successfully rolled out" = rollout complete
+          - "Waiting for..." = rollout in progress
+          - Timeout or error = rollout failed
+        </interpretation>
+      </command>
+
+      <command name="rollout_history">
+        <syntax>oc rollout history deployment/[deployment-name] -n [namespace]</syntax>
+        <purpose>View deployment revision history</purpose>
+        <use_case>
+          Identify when changes were made and correlate with incidents
+        </use_case>
+        <options>
+          <option name="--revision=N">Show details of specific revision</option>
+        </options>
+      </command>
+
+      <command name="get_replicasets">
+        <syntax>oc get replicasets -n [namespace]</syntax>
+        <purpose>List replica sets (underlying deployment versions)</purpose>
+        <interpretation>
+          - Multiple ReplicaSets with DESIRED > 0 = rollout in progress
+          - Old ReplicaSets with DESIRED = 0 = previous versions
+          - Check READY vs DESIRED for issues
+        </interpretation>
+      </command>
+    </category>
+
+    <category name="configuration_validation">
+      <description>Commands to examine ConfigMaps, Secrets, and environment configuration</description>
+
+      <command name="get_configmap">
+        <syntax>oc get configmap [configmap-name] -n [namespace] -o yaml</syntax>
+        <purpose>View ConfigMap contents</purpose>
+        <validation_checks>
+          <check>Verify expected keys are present</check>
+          <check>Check for typos in configuration values</check>
+          <check>Validate URLs, connection strings, and endpoints</check>
+          <check>Ensure environment-specific values are correct</check>
+        </validation_checks>
+      </command>
+
+      <command name="get_secret">
+        <syntax>oc get secret [secret-name] -n [namespace] -o yaml</syntax>
+        <purpose>View Secret metadata (values are base64 encoded)</purpose>
+        <note>
+          Secret values are base64 encoded. To decode:
+          echo "[base64-value]" | base64 -d
+        </note>
+        <validation_checks>
+          <check>Verify secret exists and is mounted correctly</check>
+          <check>Check secret type (Opaque, kubernetes.io/tls, etc.)</check>
+          <check>Ensure secret has expected keys</check>
+        </validation_checks>
+      </command>
+
+      <command name="list_env_vars">
+        <syntax>oc set env pod/[pod-name] -n [namespace] --list</syntax>
+        <purpose>List all environment variables in a pod</purpose>
+        <use_case>
+          Verify environment variables are set correctly, especially those from
+          ConfigMaps and Secrets
+        </use_case>
+      </command>
+    </category>
+
+    <category name="networking_diagnostics">
+      <description>Commands to investigate service discovery, routing, and connectivity</description>
+
+      <command name="get_services">
+        <syntax>oc get services -n [namespace]</syntax>
+        <purpose>List services and their endpoints</purpose>
+        <key_columns>
+          <column name="TYPE">ClusterIP, NodePort, LoadBalancer</column>
+          <column name="CLUSTER-IP">Internal cluster IP</column>
+          <column name="EXTERNAL-IP">External IP (for LoadBalancer type)</column>
+          <column name="PORT(S)">Service ports</column>
+        </key_columns>
+      </command>
+
+      <command name="describe_service">
+        <syntax>oc describe service [service-name] -n [namespace]</syntax>
+        <purpose>Get detailed service information including endpoints</purpose>
+        <critical_sections>
+          <section name="Selector">
+            <look_for>
+              - Verify selector matches pod labels
+              - Mismatch = service won't route to pods
+            </look_for>
+          </section>
+          <section name="Endpoints">
+            <look_for>
+              - List of pod IPs service routes to
+              - Empty endpoints = no healthy pods
+              - Fewer endpoints than expected = some pods not ready
+            </look_for>
+          </section>
+        </critical_sections>
+      </command>
+
+      <command name="get_endpoints">
+        <syntax>oc get endpoints [service-name] -n [namespace]</syntax>
+        <purpose>View service endpoints (pod IPs)</purpose>
+        <interpretation>
+          - Endpoints list should match ready pods
+          - Empty = no pods passing readiness checks
+          - Changing frequently = pods restarting
+        </interpretation>
+      </command>
+
+      <command name="get_routes">
+        <syntax>oc get routes -n [namespace]</syntax>
+        <purpose>List OpenShift routes (external access)</purpose>
+        <validation_checks>
+          <check>Verify route HOST is correct</check>
+          <check>Check TLS configuration (if applicable)</check>
+          <check>Ensure route points to correct service</check>
+        </validation_checks>
+      </command>
+
+      <command name="describe_route">
+        <syntax>oc describe route [route-name] -n [namespace]</syntax>
+        <purpose>Get detailed route information</purpose>
+        <critical_sections>
+          <section name="Service">
+            <look_for>Service name and port route forwards to</look_for>
+          </section>
+          <section name="TLS">
+            <look_for>TLS termination type and certificate info</look_for>
+          </section>
+        </critical_sections>
+      </command>
+    </category>
+
+    <category name="storage_investigation">
+      <description>Commands to examine persistent volumes and storage</description>
+
+      <command name="get_pvc">
+        <syntax>oc get pvc -n [namespace]</syntax>
+        <purpose>List Persistent Volume Claims</purpose>
+        <key_columns>
+          <column name="STATUS">Bound, Pending, Lost</column>
+          <column name="VOLUME">Name of bound PV</column>
+          <column name="CAPACITY">Storage size</column>
+          <column name="STORAGECLASS">Storage class used</column>
+        </key_columns>
+        <red_flags>
+          <flag>STATUS: Pending (PVC not bound to PV)</flag>
+          <flag>STATUS: Lost (PV deleted but PVC remains)</flag>
+        </red_flags>
+      </command>
+
+      <command name="describe_pvc">
+        <syntax>oc describe pvc [pvc-name] -n [namespace]</syntax>
+        <purpose>Get detailed PVC information including events</purpose>
+        <look_for>
+          - Events showing why PVC is not binding
+          - Storage class availability
+          - Access mode compatibility
+        </look_for>
+      </command>
+    </category>
+  </command_categories>
+
+  <investigation_workflows>
+    <workflow name="pod_crash_investigation">
+      <title>Investigating Pod Crashes and Restarts</title>
+      <steps>
+        <step number="1">
+          <command>oc get pods -n [namespace] -o wide</command>
+          <purpose>Identify pods with high restart counts</purpose>
+        </step>
+        <step number="2">
+          <command>oc describe pod [pod-name] -n [namespace]</command>
+          <purpose>Check exit codes and termination reasons</purpose>
+          <look_for>
+            - Exit Code 137 = OOMKilled
+            - Exit Code 1 = Application error
+            - Exit Code 143 = SIGTERM (graceful shutdown)
+          </look_for>
+        </step>
+        <step number="3">
+          <command>oc logs [pod-name] -n [namespace] --previous</command>
+          <purpose>Get logs from crashed container</purpose>
+        </step>
+        <step number="4">
+          <command>oc get events -n [namespace] --field-selector involvedObject.name=[pod-name]</command>
+          <purpose>Check for related events (OOMKilled, Unhealthy, etc.)</purpose>
+        </step>
+        <step number="5">
+          <action>Correlate with Instana metrics</action>
+          <checks>
+            - Does crash timing match error spikes in Instana?
+            - Are there memory/CPU anomalies before crash?
+            - Are there failed health checks in Instana?
+          </checks>
+        </step>
+      </steps>
+    </workflow>
+
+    <workflow name="performance_degradation_investigation">
+      <title>Investigating Performance Issues</title>
+      <steps>
+        <step number="1">
+          <command>oc top pods -n [namespace] --sort-by=cpu</command>
+          <purpose>Identify pods with high resource usage</purpose>
+        </step>
+        <step number="2">
+          <command>oc describe pod [pod-name] -n [namespace]</command>
+          <purpose>Check resource requests/limits vs actual usage</purpose>
+        </step>
+        <step number="3">
+          <command>oc top nodes</command>
+          <purpose>Check if nodes are under pressure</purpose>
+        </step>
+        <step number="4">
+          <command>oc logs [pod-name] -n [namespace] --tail=500</command>
+          <purpose>Look for performance-related log messages</purpose>
+          <search_for>
+            - GC pause warnings
+            - Slow query logs
+            - Thread pool exhaustion
+            - Connection timeouts
+          </search_for>
+        </step>
+        <step number="5">
+          <action>Correlate with Instana traces</action>
+          <checks>
+            - Do slow traces correspond to high CPU/memory pods?
+            - Are there infrastructure bottlenecks?
+            - Is there resource contention?
+          </checks>
+        </step>
+      </steps>
+    </workflow>
+
+    <workflow name="deployment_failure_investigation">
+      <title>Investigating Failed Deployments</title>
+      <steps>
+        <step number="1">
+          <command>oc get deployments -n [namespace]</command>
+          <purpose>Check deployment status</purpose>
+        </step>
+        <step number="2">
+          <command>oc describe deployment [deployment-name] -n [namespace]</command>
+          <purpose>Check conditions and events</purpose>
+        </step>
+        <step number="3">
+          <command>oc get replicasets -n [namespace]</command>
+          <purpose>Check replica set status</purpose>
+        </step>
+        <step number="4">
+          <command>oc get pods -n [namespace] -l app=[app-label]</command>
+          <purpose>Check pod status for the deployment</purpose>
+        </step>
+        <step number="5">
+          <command>oc rollout history deployment/[deployment-name] -n [namespace]</command>
+          <purpose>Check deployment history</purpose>
+        </step>
+        <step number="6">
+          <action>Correlate with Instana change events</action>
+          <checks>
+            - Does deployment timing match incident start?
+            - Are there new errors after deployment?
+            - Did error rates spike after rollout?
+          </checks>
+        </step>
+      </steps>
+    </workflow>
+
+    <workflow name="connectivity_issue_investigation">
+      <title>Investigating Service Connectivity Issues</title>
+      <steps>
+        <step number="1">
+          <command>oc get services -n [namespace]</command>
+          <purpose>List services</purpose>
+        </step>
+        <step number="2">
+          <command>oc describe service [service-name] -n [namespace]</command>
+          <purpose>Check service selector and endpoints</purpose>
+        </step>
+        <step number="3">
+          <command>oc get endpoints [service-name] -n [namespace]</command>
+          <purpose>Verify endpoints are populated</purpose>
+        </step>
+        <step number="4">
+          <command>oc get pods -n [namespace] -l [service-selector]</command>
+          <purpose>Check if pods matching selector are ready</purpose>
+        </step>
+        <step number="5">
+          <command>oc logs [pod-name] -n [namespace] --tail=200</command>
+          <purpose>Look for connection errors in logs</purpose>
+        </step>
+        <step number="6">
+          <action>Correlate with Instana traces</action>
+          <checks>
+            - Are there connection refused errors in traces?
+            - Do traces show timeouts to specific services?
+            - Are there DNS resolution failures?
+          </checks>
+        </step>
+      </steps>
+    </workflow>
+  </investigation_workflows>
+
+  <correlation_guidelines>
+    <guideline name="timing_correlation">
+      <description>
+        Match OpenShift event timestamps with Instana incident timeline
+      </description>
+      <technique>
+        - Extract timestamps from oc get events
+        - Compare with Instana incident start time
+        - Look for events within ±5 minutes of incident
+        - Identify causal relationships (event → symptom)
+      </technique>
+    </guideline>
+
+    <guideline name="resource_correlation">
+      <description>
+        Match resource metrics between OpenShift and Instana
+      </description>
+      <technique>
+        - Compare oc top pods with Instana infrastructure metrics
+        - Verify CPU/memory values are consistent
+        - Identify discrepancies (may indicate monitoring gaps)
+        - Look for resource exhaustion patterns
+      </technique>
+    </guideline>
+
+    <guideline name="error_correlation">
+      <description>
+        Match error messages between pod logs and Instana traces
+      </description>
+      <technique>
+        - Extract error messages from oc logs
+        - Search for same errors in Instana traces
+        - Match stack traces to code locations
+        - Identify error propagation paths
+      </technique>
+    </guideline>
+
+    <guideline name="deployment_correlation">
+      <description>
+        Correlate deployment changes with incident occurrence
+      </description>
+      <technique>
+        - Check oc rollout history for recent changes
+        - Compare deployment time with incident start
+        - Look for new errors after deployment
+        - Identify configuration changes in deployment
+      </technique>
+    </guideline>
+  </correlation_guidelines>
+
+  <best_practices>
+    <practice>
+      <title>Always check multiple data points</title>
+      <description>
+        Don't rely on a single command. Cross-reference pod status, logs,
+        events, and resource usage to build complete picture.
+      </description>
+    </practice>
+
+    <practice>
+      <title>Use appropriate time windows</title>
+      <description>
+        - For active issues: last 1-2 hours of logs/events
+        - For post-incident: 24-48 hours to see patterns
+        - Use --since flag to focus on relevant timeframe
+      </description>
+    </practice>
+
+    <practice>
+      <title>Check both current and previous logs</title>
+      <description>
+        Always use --previous flag to see logs from crashed containers,
+        as current logs may not show the failure.
+      </description>
+    </practice>
+
+    <practice>
+      <title>Verify configuration consistency</title>
+      <description>
+        Check that ConfigMaps, Secrets, and environment variables match
+        expected values and are consistent across environments.
+      </description>
+    </practice>
+
+    <practice>
+      <title>Document command outputs</title>
+      <description>
+        Save command outputs for RCA report. Include timestamps and
+        exact commands used for reproducibility.
+      </description>
+    </practice>
+  </best_practices>
+
+  <common_issues_and_solutions>
+    <issue name="oomkilled_pods">
+      <symptoms>
+        - Pods restarting frequently
+        - Exit code 137 in pod description
+        - "OOMKilled" in events
+      </symptoms>
+      <investigation>
+        - Check memory limits vs actual usage (oc top pods)
+        - Review memory trends in Instana
+        - Look for memory leaks in application logs
+      </investigation>
+      <typical_causes>
+        - Memory limits too low
+        - Memory leak in application
+        - Unbounded caches or collections
+        - Large object allocations
+      </typical_causes>
+    </issue>
+
+    <issue name="crashloopbackoff">
+      <symptoms>
+        - Pod status: CrashLoopBackOff
+        - Increasing restart count
+        - Pod never becomes Ready
+      </symptoms>
+      <investigation>
+        - Check logs with --previous flag
+        - Look at exit codes in pod description
+        - Check for configuration errors
+        - Verify dependencies are available
+      </investigation>
+      <typical_causes>
+        - Application startup failure
+        - Missing environment variables
+        - Failed database connection
+        - Invalid configuration
+      </typical_causes>
+    </issue>
+
+    <issue name="failed_scheduling">
+      <symptoms>
+        - Pod status: Pending
+        - FailedScheduling events
+        - Pod never gets assigned to node
+      </symptoms>
+      <investigation>
+        - Check node resources (oc top nodes)
+        - Review pod resource requests
+        - Check node selectors and taints
+        - Verify PVC binding (if using storage)
+      </investigation>
+      <typical_causes>
+        - Insufficient cluster resources
+        - Resource requests too high
+        - Node selector mismatch
+        - PVC not bound
+      </typical_causes>
+    </issue>
+
+    <issue name="failed_health_checks">
+      <symptoms>
+        - Unhealthy events
+        - Pod not Ready despite Running
+        - Frequent restarts
+      </symptoms>
+      <investigation>
+        - Check liveness/readiness probe configuration
+        - Test health endpoint manually
+        - Review application startup time
+        - Check for slow initialization
+      </investigation>
+      <typical_causes>
+        - Probe timeout too short
+        - Application slow to start
+        - Health endpoint returning errors
+        - Incorrect probe configuration
+      </typical_causes>
+    </issue>
+
+    <issue name="service_no_endpoints">
+      <symptoms>
+        - Service has no endpoints
+        - Connection refused errors
+        - 503 errors from route
+      </symptoms>
+      <investigation>
+        - Check service selector matches pod labels
+        - Verify pods are Ready
+        - Check readiness probe status
+        - Review pod events
+      </investigation>
+      <typical_causes>
+        - Service selector mismatch
+        - No pods passing readiness checks
+        - Pods not running
+        - Label typo
+      </typical_causes>
+    </issue>
+  </common_issues_and_solutions>
+</openshift_diagnostics_guide>
+
+<!-- Made with Bob -->

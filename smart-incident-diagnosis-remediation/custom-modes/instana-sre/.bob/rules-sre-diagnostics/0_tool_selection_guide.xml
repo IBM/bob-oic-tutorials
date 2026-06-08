@@ -1,0 +1,233 @@
+<tool_selection_guide>
+  <overview>
+    This guide defines WHEN to use Instana MCP tools vs OpenShift commands.
+    Following these rules ensures efficient investigation and prevents confusion
+    about which tool to use for different types of queries.
+  </overview>
+
+  <primary_rule>
+    <rule>
+      Instana is the PRIMARY source for ALL observability data, metrics, and application information.
+      OpenShift is ONLY used during root cause analysis to correlate infrastructure state.
+    </rule>
+  </primary_rule>
+
+  <decision_tree>
+    <question>What is the user asking for?</question>
+    
+    <scenario name="metrics_query">
+      <user_asks>
+        - "Get metrics for service X"
+        - "Show me error rates"
+        - "What's the latency for endpoint Y"
+        - "Show me JVM heap usage"
+        - "Get CPU/memory metrics"
+      </user_asks>
+      <tool_to_use>Instana MCP tools</tool_to_use>
+      <specific_tools>
+        - manage_applications (for application/service metrics)
+        - analyze_infrastructure (for infrastructure metrics like JVM, host, container)
+      </specific_tools>
+      <do_not_use>OpenShift commands (oc top, oc get)</do_not_use>
+    </scenario>
+
+    <scenario name="service_listing">
+      <user_asks>
+        - "List all services"
+        - "Show me services in application X"
+        - "What services are available"
+        - "Get service endpoints"
+      </user_asks>
+      <tool_to_use>Instana MCP tools</tool_to_use>
+      <specific_tools>
+        - manage_applications with resource_type="metrics" and grouping by service.name
+      </specific_tools>
+      <do_not_use>OpenShift commands (oc get services)</do_not_use>
+    </scenario>
+
+    <scenario name="application_data">
+      <user_asks>
+        - "Show me application performance"
+        - "Get traces for service X"
+        - "Show me incidents"
+        - "What alerts are firing"
+      </user_asks>
+      <tool_to_use>Instana MCP tools</tool_to_use>
+      <specific_tools>
+        - manage_events (for incidents, issues, alerts)
+        - manage_applications (for application metrics and traces)
+      </specific_tools>
+      <do_not_use>OpenShift commands</do_not_use>
+    </scenario>
+
+    <scenario name="root_cause_analysis">
+      <user_asks>
+        - "Analyze root cause of incident X"
+        - "Investigate why pods are crashing"
+        - "Why is service X failing"
+        - "Perform RCA for this issue"
+        - "Diagnose the problem"
+      </user_asks>
+      <tool_to_use>BOTH Instana AND OpenShift</tool_to_use>
+      <workflow>
+        <step number="1">
+          <action>Use Instana to identify symptoms</action>
+          <tools>manage_events, manage_applications, analyze_infrastructure</tools>
+        </step>
+        <step number="2">
+          <action>Use OpenShift to correlate infrastructure state</action>
+          <tools>oc get pods, oc describe pod, oc logs, oc get events</tools>
+          <purpose>Validate hypotheses formed from Instana data</purpose>
+        </step>
+        <step number="3">
+          <action>Analyze code to identify defects</action>
+          <tools>read_file, search_files, list_code_definition_names</tools>
+        </step>
+      </workflow>
+    </scenario>
+
+    <scenario name="deployment_check">
+      <user_asks>
+        - "Check deployment status"
+        - "Is the deployment healthy"
+        - "Show me deployment history"
+      </user_asks>
+      <tool_to_use>Depends on context</tool_to_use>
+      <decision>
+        <if>Part of root cause analysis</if>
+        <then>Use OpenShift (oc get deployments, oc rollout history)</then>
+        <else>Use Instana (manage_events for change events)</else>
+      </decision>
+    </scenario>
+  </decision_tree>
+
+  <quick_reference>
+    <table>
+      <header>
+        <column>User Request Type</column>
+        <column>Tool to Use</column>
+        <column>Specific Command/Tool</column>
+      </header>
+      <row>
+        <request>Get metrics</request>
+        <tool>Instana</tool>
+        <command>manage_applications or analyze_infrastructure</command>
+      </row>
+      <row>
+        <request>List services</request>
+        <tool>Instana</tool>
+        <command>manage_applications (group by service.name)</command>
+      </row>
+      <row>
+        <request>Show incidents/alerts</request>
+        <tool>Instana</tool>
+        <command>manage_events</command>
+      </row>
+      <row>
+        <request>Get infrastructure metrics</request>
+        <tool>Instana</tool>
+        <command>analyze_infrastructure</command>
+      </row>
+      <row>
+        <request>Analyze root cause</request>
+        <tool>Instana THEN OpenShift</tool>
+        <command>Instana first, then oc commands to correlate</command>
+      </row>
+      <row>
+        <request>Check pod status (during RCA)</request>
+        <tool>OpenShift</tool>
+        <command>oc get pods, oc describe pod</command>
+      </row>
+      <row>
+        <request>View pod logs (during RCA)</request>
+        <tool>OpenShift</tool>
+        <command>oc logs</command>
+      </row>
+    </table>
+  </quick_reference>
+
+  <common_mistakes>
+    <mistake>
+      <wrong>Using oc get services to list services</wrong>
+      <right>Use manage_applications with grouping by service.name</right>
+      <reason>Instana provides application-level service view with metrics</reason>
+    </mistake>
+
+    <mistake>
+      <wrong>Using oc top pods to get resource metrics</wrong>
+      <right>Use analyze_infrastructure for infrastructure metrics</right>
+      <reason>Instana provides historical metrics and better context</reason>
+    </mistake>
+
+    <mistake>
+      <wrong>Using OpenShift commands without first checking Instana</wrong>
+      <right>Always start with Instana to identify symptoms</right>
+      <reason>Instana provides the observability context needed for investigation</reason>
+    </mistake>
+
+    <mistake>
+      <wrong>Using OpenShift for general queries</wrong>
+      <right>Reserve OpenShift for root cause analysis only</right>
+      <reason>OpenShift is for infrastructure correlation, not primary data source</reason>
+    </mistake>
+  </common_mistakes>
+
+  <examples>
+    <example>
+      <user_request>Show me the error rate for payment-service</user_request>
+      <correct_approach>
+        <step>Use manage_applications with resource_type="metrics"</step>
+        <step>Filter by service.name = "payment-service"</step>
+        <step>Query errors metric with SUM aggregation</step>
+      </correct_approach>
+      <incorrect_approach>
+        <step>Do NOT use oc logs to count errors</step>
+        <step>Do NOT use oc get pods to check pod status</step>
+      </incorrect_approach>
+    </example>
+
+    <example>
+      <user_request>Analyze why payment-service is crashing</user_request>
+      <correct_approach>
+        <step>1. Use manage_events to get incidents/issues</step>
+        <step>2. Use manage_applications to get error metrics</step>
+        <step>3. Use analyze_infrastructure to get JVM/container metrics</step>
+        <step>4. NOW use OpenShift: oc describe pod, oc logs --previous</step>
+        <step>5. Correlate OpenShift findings with Instana data</step>
+        <step>6. Analyze code to identify defects</step>
+      </correct_approach>
+      <incorrect_approach>
+        <step>Do NOT start with oc get pods</step>
+        <step>Do NOT skip Instana analysis</step>
+      </incorrect_approach>
+    </example>
+
+    <example>
+      <user_request>List all services in production</user_request>
+      <correct_approach>
+        <step>Use manage_applications with resource_type="metrics"</step>
+        <step>Filter by application.name or environment tag</step>
+        <step>Group by service.name</step>
+      </correct_approach>
+      <incorrect_approach>
+        <step>Do NOT use oc get services -n production</step>
+      </incorrect_approach>
+    </example>
+  </examples>
+
+  <validation_checklist>
+    <check>Am I being asked for metrics or application data?</check>
+    <answer>YES → Use Instana MCP tools</answer>
+    
+    <check>Am I being asked to analyze root cause or investigate an incident?</check>
+    <answer>YES → Start with Instana, then use OpenShift to correlate</answer>
+    
+    <check>Am I about to use an OpenShift command?</check>
+    <answer>Ask: Is this part of root cause analysis? If NO, use Instana instead</answer>
+    
+    <check>Have I gathered Instana data before using OpenShift?</check>
+    <answer>Must be YES before using OpenShift commands</answer>
+  </validation_checklist>
+</tool_selection_guide>
+
+<!-- Made with Bob -->

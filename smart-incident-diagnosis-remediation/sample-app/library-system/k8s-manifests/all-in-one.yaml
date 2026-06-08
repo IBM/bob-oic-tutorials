@@ -1,0 +1,485 @@
+---
+# Namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: library-system
+  labels:
+    app: library-system
+---
+# MongoDB Secret
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mongodb-credentials
+  namespace: library-system
+type: Opaque
+stringData:
+  username: mongodbadmin
+  password: SecurePassword123!
+  database: library
+---
+# MongoDB PVC
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongodb-pvc
+  namespace: library-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+# MongoDB Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+  namespace: library-system
+  annotations:
+    instana.io/monitored: "true"
+  labels:
+    app: mongodb
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: library-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongodb
+  template:
+    metadata:
+      labels:
+        app: mongodb
+        app.kubernetes.io/name: mongodb
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: library-system
+      annotations:
+        instana.io/monitored: "true"
+    spec:
+      initContainers:
+      - name: mongodb-init-check
+        image: docker.io/mongo:7.0
+        command:
+        - sh
+        - -c
+        - |
+          # Check if MongoDB data directory is empty or needs reinitialization
+          if [ -d "/data/db" ] && [ "$(ls -A /data/db)" ]; then
+            echo "MongoDB data directory exists, will verify user after startup"
+          else
+            echo "MongoDB data directory is empty, will initialize"
+          fi
+        volumeMounts:
+        - name: mongodb-data
+          mountPath: /data/db
+      containers:
+      - name: mongodb
+        image: docker.io/mongo:7.0
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 27017
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: password
+        - name: MONGO_INITDB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: database
+        volumeMounts:
+        - name: mongodb-data
+          mountPath: /data/db
+        - name: mongodb-init-script
+          mountPath: /docker-entrypoint-initdb.d
+        lifecycle:
+          postStart:
+            exec:
+              command:
+              - sh
+              - -c
+              - |
+                # Wait for MongoDB to be ready
+                until mongosh --eval "db.adminCommand('ping')" > /dev/null 2>&1; do
+                  echo "Waiting for MongoDB to start..."
+                  sleep 2
+                done
+                
+                # Check if user exists, create if not
+                mongosh admin --eval "
+                  var userExists = db.getUser('$MONGO_INITDB_ROOT_USERNAME');
+                  if (!userExists) {
+                    db.createUser({
+                      user: '$MONGO_INITDB_ROOT_USERNAME',
+                      pwd: '$MONGO_INITDB_ROOT_PASSWORD',
+                      roles: [
+                        { role: 'root', db: 'admin' },
+                        { role: 'readWrite', db: '$MONGO_INITDB_DATABASE' }
+                      ]
+                    });
+                    print('User created successfully');
+                  } else {
+                    print('User already exists');
+                  }
+                " || true
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+      volumes:
+      - name: mongodb-data
+        persistentVolumeClaim:
+          claimName: mongodb-pvc
+      - name: mongodb-init-script
+        emptyDir: {}
+---
+# MongoDB Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb
+  namespace: library-system
+  annotations:
+    instana.io/monitored: "true"
+  labels:
+    app: mongodb
+    app.kubernetes.io/name: mongodb
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: library-system
+spec:
+  selector:
+    app: mongodb
+  ports:
+  - port: 27017
+    targetPort: 27017
+---
+# Books API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: books-api
+  namespace: library-system
+  annotations:
+    instana.io/monitored: "true"
+  labels:
+    app: books-api
+    app.kubernetes.io/name: books-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: library-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: books-api
+  template:
+    metadata:
+      labels:
+        app: books-api
+        app.kubernetes.io/name: books-api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: library-system
+      annotations:
+        instana.io/monitored: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/health"
+    spec:
+      containers:
+      - name: books-api
+        image: dikamath/library-books-api:v1.0.2
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8081
+        env:
+        - name: MONGO_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: username
+        - name: MONGO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: password
+        - name: MONGO_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: database
+        - name: MONGO_URI
+          value: "mongodb://$(MONGO_USERNAME):$(MONGO_PASSWORD)@mongodb:27017/$(MONGO_DATABASE)?authSource=admin"
+        - name: INSTANA_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8081
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+# Books API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: books-api
+  namespace: library-system
+spec:
+  selector:
+    app: books-api
+  ports:
+  - port: 8081
+    targetPort: 8081
+---
+# Users API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: users-api
+  namespace: library-system
+  annotations:
+    instana.io/monitored: "true"
+  labels:
+    app: users-api
+    app.kubernetes.io/name: users-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/part-of: library-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: users-api
+  template:
+    metadata:
+      labels:
+        app: users-api
+        app.kubernetes.io/name: users-api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/part-of: library-system
+      annotations:
+        instana.io/monitored: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/health"
+    spec:
+      containers:
+      - name: users-api
+        image: dikamath/library-users-api:v1.0.2
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8082
+        env:
+        - name: MONGO_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: username
+        - name: MONGO_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: password
+        - name: MONGO_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-credentials
+              key: database
+        - name: MONGO_URI
+          value: "mongodb://$(MONGO_USERNAME):$(MONGO_PASSWORD)@mongodb:27017/$(MONGO_DATABASE)?authSource=admin"
+        - name: INSTANA_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8082
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+# Users API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: users-api
+  namespace: library-system
+spec:
+  selector:
+    app: users-api
+  ports:
+  - port: 8082
+    targetPort: 8082
+---
+# Web UI Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web-ui
+  namespace: library-system
+  annotations:
+    instana.io/monitored: "true"
+  labels:
+    app: web-ui
+    app.kubernetes.io/name: web-ui
+    app.kubernetes.io/component: frontend
+    app.kubernetes.io/part-of: library-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web-ui
+  template:
+    metadata:
+      labels:
+        app: web-ui
+        app.kubernetes.io/name: web-ui
+        app.kubernetes.io/component: frontend
+        app.kubernetes.io/part-of: library-system
+      annotations:
+        instana.io/monitored: "true"
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/health"
+    spec:
+      containers:
+      - name: web-ui
+        image: dikamath/library-web-ui:v1.0.2
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+        env:
+        - name: BOOKS_API_URL
+          value: "http://books-api:8081"
+        - name: USERS_API_URL
+          value: "http://users-api:8082"
+        - name: INSTANA_AGENT_HOST
+          valueFrom:
+            fieldRef:
+              fieldPath: status.hostIP
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+---
+# Web UI Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: web-ui
+  namespace: library-system
+spec:
+  selector:
+    app: web-ui
+  ports:
+  - port: 8080
+    targetPort: 8080
+---
+# Web UI Route
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: web-ui
+  namespace: library-system
+spec:
+  to:
+    kind: Service
+    name: web-ui
+  port:
+    targetPort: 8080
+---
+# Load Generator Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: load-generator
+  namespace: library-system
+spec:
+  replicas: 0  # Start with 0, scale up when needed
+  selector:
+    matchLabels:
+      app: load-generator
+  template:
+    metadata:
+      labels:
+        app: load-generator
+    spec:
+      containers:
+      - name: load-generator
+        image: dikamath/library-load-generator:v1.0.2
+        imagePullPolicy: Always
+        env:
+        - name: WEB_UI_URL
+          value: "http://web-ui:8080"
+        - name: BOOKS_API_URL
+          value: "http://books-api:8081"
+        - name: USERS_API_URL
+          value: "http://users-api:8082"
+        - name: REQUESTS_PER_MINUTE
+          value: "30"
+        - name: DURATION_MINUTES
+          value: "0"
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "100m"
+
+# Made with Bob

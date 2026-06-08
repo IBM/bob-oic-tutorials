@@ -1,0 +1,370 @@
+<diagnostic_workflow>
+  <overview>
+    This workflow guides systematic root cause analysis by integrating three critical
+    diagnostic capabilities: Instana APM telemetry, OpenShift cluster diagnostics,
+    and static code analysis. Follow this hypothesis-driven approach to identify
+    and resolve production incidents efficiently.
+    
+    CRITICAL DISTINCTION:
+    - For metrics, services, and application data: ALWAYS use Instana MCP tools
+    - For OpenShift cluster diagnostics: ONLY use when performing root cause analysis
+      to correlate infrastructure state with Instana findings
+  </overview>
+
+  <workflow_phases>
+    <phase number="1" name="symptom_identification">
+      <title>Phase 1: Identify Symptoms via Instana</title>
+      <objective>
+        Gather comprehensive observability data to understand the incident's scope,
+        severity, and initial symptoms. This phase establishes the foundation for
+        hypothesis formation.
+      </objective>
+      
+      <steps>
+        <step number="1">
+          <action>Query recent incidents and alerts</action>
+          <tools>
+            <tool>manage_events</tool>
+            <operation>get_issues</operation>
+            <operation>get_incidents</operation>
+          </tools>
+          <data_to_collect>
+            - Incident timeline and duration
+            - Affected services and applications
+            - Alert severity and frequency
+            - Event state changes
+          </data_to_collect>
+        </step>
+
+        <step number="2">
+          <action>Analyze application performance metrics</action>
+          <tools>
+            <tool>manage_applications</tool>
+            <operation>application</operation>
+          </tools>
+          <metrics_to_examine>
+            - Error rates and error types
+            - Latency percentiles (P50, P90, P95, P99)
+            - Request throughput and volume
+            - Service dependencies and call patterns
+          </metrics_to_examine>
+        </step>
+
+        <step number="3">
+          <action>Examine infrastructure health</action>
+          <tools>
+            <tool>analyze_infrastructure</tool>
+          </tools>
+          <infrastructure_checks>
+            - JVM heap usage and GC activity
+            - Container CPU and memory utilization
+            - Database connection pool status
+            - Message queue depths and processing rates
+          </infrastructure_checks>
+        </step>
+
+        <step number="4">
+          <action>Review distributed traces</action>
+          <purpose>
+            Identify slow spans, failed calls, and bottlenecks in the request path
+          </purpose>
+          <look_for>
+            - Abnormally slow database queries
+            - Failed external API calls
+            - Timeout errors
+            - Retry storms
+          </look_for>
+        </step>
+      </steps>
+
+      <output>
+        <symptom_summary>
+          Document the observed symptoms with specific metrics:
+          - What is failing or degraded?
+          - When did it start?
+          - What is the impact (error rate, latency increase)?
+          - Which services/components are affected?
+        </symptom_summary>
+      </output>
+    </phase>
+
+    <phase number="2" name="infrastructure_investigation">
+      <title>Phase 2: Investigate OpenShift Cluster State (ROOT CAUSE ANALYSIS ONLY)</title>
+      <objective>
+        IMPORTANT: This phase is ONLY used when performing root cause analysis.
+        
+        When the user asks to "analyze root cause" or investigate an incident,
+        correlate Instana symptoms with cluster-level events and resource states.
+        Identify infrastructure or deployment issues that could be causing or
+        contributing to the observed problems.
+        
+        DO NOT use OpenShift commands for general metric queries or service listings.
+        Those should ALWAYS come from Instana.
+      </objective>
+
+      <steps>
+        <step number="1">
+          <action>Check pod health and status</action>
+          <commands>
+            <command>oc get pods -n [namespace] -o wide</command>
+            <command>oc describe pod [pod-name] -n [namespace]</command>
+          </commands>
+          <look_for>
+            - Pod restarts (check RESTARTS column)
+            - CrashLoopBackOff or ImagePullBackOff states
+            - Pending pods (scheduling issues)
+            - Terminating pods stuck in deletion
+          </look_for>
+        </step>
+
+        <step number="2">
+          <action>Examine pod logs for errors</action>
+          <commands>
+            <command>oc logs [pod-name] -n [namespace] --tail=500</command>
+            <command>oc logs [pod-name] -n [namespace] --previous</command>
+          </commands>
+          <error_patterns>
+            - OutOfMemoryError or OOMKilled
+            - Connection refused or timeout errors
+            - Stack traces and exceptions
+            - Configuration errors
+          </error_patterns>
+        </step>
+
+        <step number="3">
+          <action>Review cluster events</action>
+          <commands>
+            <command>oc get events -n [namespace] --sort-by='.lastTimestamp'</command>
+            <command>oc describe deployment [deployment-name] -n [namespace]</command>
+          </commands>
+          <critical_events>
+            - FailedScheduling (resource constraints)
+            - Unhealthy (failed health checks)
+            - BackOff (container startup failures)
+            - FailedMount (volume issues)
+          </critical_events>
+        </step>
+
+        <step number="4">
+          <action>Analyze resource utilization</action>
+          <commands>
+            <command>oc top pods -n [namespace]</command>
+            <command>oc top nodes</command>
+            <command>oc describe node [node-name]</command>
+          </commands>
+          <resource_checks>
+            - CPU throttling or saturation
+            - Memory pressure or OOM conditions
+            - Disk space exhaustion
+            - Network bandwidth constraints
+          </resource_checks>
+        </step>
+
+        <step number="5">
+          <action>Verify configuration and secrets</action>
+          <commands>
+            <command>oc get configmap [configmap-name] -n [namespace] -o yaml</command>
+            <command>oc get secret [secret-name] -n [namespace] -o yaml</command>
+          </commands>
+          <validation>
+            - Correct environment variables
+            - Valid connection strings
+            - Proper secret mounting
+            - Configuration version alignment
+          </validation>
+        </step>
+
+        <step number="6">
+          <action>Check service and route configuration</action>
+          <commands>
+            <command>oc get svc -n [namespace]</command>
+            <command>oc get route -n [namespace]</command>
+            <command>oc describe svc [service-name] -n [namespace]</command>
+          </commands>
+          <networking_checks>
+            - Service selector matches pod labels
+            - Endpoints are populated
+            - Route TLS configuration
+            - Load balancer health
+          </networking_checks>
+        </step>
+      </steps>
+
+      <correlation_analysis>
+        <guideline>
+          Map cluster events to Instana incident timeline:
+          - Do pod restarts align with error rate spikes?
+          - Do OOMKills correlate with memory metrics?
+          - Do deployment changes precede incidents?
+          - Do resource constraints match performance degradation?
+        </guideline>
+      </correlation_analysis>
+
+      <output>
+        <infrastructure_findings>
+          Document cluster-level issues with evidence:
+          - Specific pods/nodes affected
+          - Resource constraint details
+          - Configuration problems identified
+          - Event timeline correlation with Instana
+        </infrastructure_findings>
+      </output>
+    </phase>
+
+    <phase number="3" name="code_analysis">
+      <title>Phase 3: Static Code Analysis</title>
+      <objective>
+        Identify software defects, anti-patterns, or misconfigurations in the
+        application code that could be causing the observed symptoms. Focus on
+        areas implicated by Instana traces and OpenShift diagnostics.
+      </objective>
+
+      <steps>
+        <step number="1">
+          <action>Locate relevant code sections</action>
+          <tools>
+            <tool>search_files</tool>
+            <tool>list_code_definition_names</tool>
+          </tools>
+          <search_targets>
+            - Services/endpoints showing errors in Instana
+            - Components with high latency in traces
+            - Code paths leading to exceptions in logs
+            - Configuration files referenced in errors
+          </search_targets>
+        </step>
+
+        <step number="2">
+          <action>Analyze error handling patterns</action>
+          <tools>
+            <tool>read_file</tool>
+          </tools>
+          <code_review_checklist>
+            - Are exceptions properly caught and logged?
+            - Are errors propagated correctly?
+            - Are retry mechanisms implemented safely?
+            - Are circuit breakers in place for external calls?
+            - Are timeouts configured appropriately?
+          </code_review_checklist>
+        </step>
+
+        <step number="3">
+          <action>Review resource management</action>
+          <common_issues>
+            - Unclosed database connections
+            - Memory leaks (unbounded caches, listeners)
+            - Thread pool exhaustion
+            - File handle leaks
+            - Inefficient object creation
+          </common_issues>
+        </step>
+
+        <step number="4">
+          <action>Examine database interactions</action>
+          <performance_issues>
+            - N+1 query problems
+            - Missing indexes
+            - Large result sets without pagination
+            - Long-running transactions
+            - Connection pool misconfiguration
+          </performance_issues>
+        </step>
+
+        <step number="5">
+          <action>Check concurrency and synchronization</action>
+          <concurrency_problems>
+            - Race conditions
+            - Deadlocks
+            - Improper locking (too coarse or too fine)
+            - Thread-unsafe shared state
+            - Blocking operations on event loops
+          </concurrency_problems>
+        </step>
+
+        <step number="6">
+          <action>Validate configuration and dependencies</action>
+          <configuration_checks>
+            - Environment-specific settings
+            - Feature flags and toggles
+            - Dependency version compatibility
+            - Resource limits (heap size, thread pools)
+            - Timeout and retry configurations
+          </configuration_checks>
+        </step>
+      </steps>
+
+      <output>
+        <code_findings>
+          Document code-level issues with specifics:
+          - File paths and line numbers
+          - Exact problematic code snippets
+          - Explanation of why it's problematic
+          - Link to symptoms observed in Instana/OpenShift
+        </code_findings>
+      </output>
+    </phase>
+  </workflow_phases>
+
+  <hypothesis_validation>
+    <principle>
+      Form specific, testable hypotheses about the root cause based on evidence
+      from all three phases. Systematically validate or refute each hypothesis.
+    </principle>
+
+    <hypothesis_template>
+      <hypothesis>Specific theory about what caused the incident</hypothesis>
+      <evidence_for>
+        - Supporting data from Instana
+        - Supporting data from OpenShift
+        - Supporting data from code analysis
+      </evidence_for>
+      <evidence_against>
+        - Contradictory observations
+        - Alternative explanations
+      </evidence_against>
+      <validation_test>
+        How to definitively prove or disprove this hypothesis
+      </validation_test>
+      <conclusion>
+        Confirmed, refuted, or needs more investigation
+      </conclusion>
+    </hypothesis_template>
+
+    <example_hypotheses>
+      <hypothesis>
+        "Memory leak in caching layer causing OOMKills"
+        - Evidence: Instana shows increasing heap usage, OpenShift shows OOMKilled pods,
+          code shows unbounded cache without eviction policy
+      </hypothesis>
+      <hypothesis>
+        "Database connection pool exhaustion causing timeouts"
+        - Evidence: Instana traces show connection timeout errors, OpenShift logs show
+          "too many connections", code shows pool size too small for load
+      </hypothesis>
+      <hypothesis>
+        "Retry storm amplifying downstream failures"
+        - Evidence: Instana shows exponential increase in error rate, traces show
+          repeated retries, code shows aggressive retry without backoff
+      </hypothesis>
+    </example_hypotheses>
+  </hypothesis_validation>
+
+  <completion_criteria>
+    <criterion>Root cause identified with high confidence</criterion>
+    <criterion>Chain of causation from root cause to symptoms documented</criterion>
+    <criterion>Evidence from all three sources (Instana, OpenShift, code) correlated</criterion>
+    <criterion>Impact and blast radius assessed</criterion>
+    <criterion>Remediation steps defined with specific actions</criterion>
+    <criterion>Preventive measures recommended</criterion>
+  </completion_criteria>
+
+  <escalation_triggers>
+    <trigger>Unable to access required Instana data or MCP tools</trigger>
+    <trigger>OpenShift cluster access issues or permission errors</trigger>
+    <trigger>Insufficient code access to validate hypotheses</trigger>
+    <trigger>Multiple conflicting hypotheses with equal evidence</trigger>
+    <trigger>Root cause requires architectural changes beyond immediate fix</trigger>
+  </escalation_triggers>
+</diagnostic_workflow>
+
+<!-- Made with Bob -->

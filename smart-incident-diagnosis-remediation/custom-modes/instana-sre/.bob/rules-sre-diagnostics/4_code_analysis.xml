@@ -1,0 +1,813 @@
+<code_analysis_guide>
+  <overview>
+    Systematic approach to static code analysis for identifying software defects,
+    anti-patterns, and misconfigurations that contribute to production incidents.
+    This guide focuses on reliability, performance, and operational issues that
+    manifest as observable symptoms in Instana and OpenShift.
+  </overview>
+
+  <analysis_categories>
+    <category name="error_handling">
+      <description>
+        Examine how the application handles errors, exceptions, and failure scenarios
+      </description>
+      
+      <anti_patterns>
+        <anti_pattern name="swallowed_exceptions">
+          <description>Catching exceptions without logging or handling</description>
+          <symptoms>
+            - Silent failures in Instana traces
+            - Missing error context in logs
+            - Difficult to diagnose issues
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+try {
+    riskyOperation();
+} catch (Exception e) {
+    // Do nothing - exception swallowed
+}
+            ]]></bad>
+            <good><![CDATA[
+try {
+    riskyOperation();
+} catch (Exception e) {
+    logger.error("Failed to perform risky operation", e);
+    throw new ServiceException("Operation failed", e);
+}
+            ]]></good>
+          </code_examples>
+          <search_patterns>
+            <pattern>catch.*Exception.*\{\s*\}</pattern>
+            <pattern>catch.*\{\s*//.*\s*\}</pattern>
+          </search_patterns>
+        </anti_pattern>
+
+        <anti_pattern name="generic_exception_catching">
+          <description>Catching overly broad exception types</description>
+          <symptoms>
+            - Masking specific errors
+            - Incorrect error handling
+            - Loss of error context
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+try {
+    databaseOperation();
+} catch (Exception e) {
+    return defaultValue; // Catches everything, even RuntimeException
+}
+            ]]></bad>
+            <good><![CDATA[
+try {
+    databaseOperation();
+} catch (SQLException e) {
+    logger.error("Database error", e);
+    throw new DataAccessException("Failed to access database", e);
+} catch (TimeoutException e) {
+    logger.warn("Database timeout", e);
+    return cachedValue;
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="missing_error_propagation">
+          <description>Not propagating errors to callers</description>
+          <symptoms>
+            - Partial failures not visible
+            - Inconsistent state
+            - Difficult debugging
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+public void processOrder(Order order) {
+    try {
+        paymentService.charge(order);
+    } catch (PaymentException e) {
+        logger.error("Payment failed", e);
+        // Method returns normally despite failure
+    }
+}
+            ]]></bad>
+            <good><![CDATA[
+public void processOrder(Order order) throws OrderProcessingException {
+    try {
+        paymentService.charge(order);
+    } catch (PaymentException e) {
+        logger.error("Payment failed for order {}", order.getId(), e);
+        throw new OrderProcessingException("Failed to process order", e);
+    }
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="missing_timeout_handling">
+          <description>No timeout configuration for external calls</description>
+          <symptoms>
+            - Thread exhaustion in Instana
+            - Hanging requests
+            - Cascading failures
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+HttpClient client = HttpClient.newHttpClient();
+HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
+// No timeout - can hang indefinitely
+            ]]></bad>
+            <good><![CDATA[
+HttpClient client = HttpClient.newBuilder()
+    .connectTimeout(Duration.ofSeconds(5))
+    .build();
+HttpRequest request = HttpRequest.newBuilder()
+    .uri(uri)
+    .timeout(Duration.ofSeconds(10))
+    .build();
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+      </anti_patterns>
+
+      <checklist>
+        <item>Are all exceptions logged with context?</item>
+        <item>Are specific exception types caught rather than generic Exception?</item>
+        <item>Are errors propagated to callers appropriately?</item>
+        <item>Are timeouts configured for all external calls?</item>
+        <item>Are retry mechanisms implemented safely?</item>
+        <item>Are circuit breakers in place for external dependencies?</item>
+      </checklist>
+    </category>
+
+    <category name="resource_management">
+      <description>
+        Examine how the application manages resources (connections, memory, threads, files)
+      </description>
+
+      <anti_patterns>
+        <anti_pattern name="connection_leaks">
+          <description>Not closing database connections or HTTP clients</description>
+          <symptoms>
+            - Connection pool exhaustion in Instana
+            - "Too many connections" errors in logs
+            - Increasing connection count over time
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+Connection conn = dataSource.getConnection();
+Statement stmt = conn.createStatement();
+ResultSet rs = stmt.executeQuery(sql);
+// No try-with-resources, connections not closed on exception
+            ]]></bad>
+            <good><![CDATA[
+try (Connection conn = dataSource.getConnection();
+     Statement stmt = conn.createStatement();
+     ResultSet rs = stmt.executeQuery(sql)) {
+    // Process results
+} // Automatically closed even on exception
+            ]]></good>
+          </code_examples>
+          <search_patterns>
+            <pattern>getConnection\(\)(?!.*try-with-resources)</pattern>
+            <pattern>\.getConnection\(\).*(?!\.close\(\))</pattern>
+          </search_patterns>
+        </anti_pattern>
+
+        <anti_pattern name="memory_leaks">
+          <description>Unbounded caches, collections, or listeners</description>
+          <symptoms>
+            - Increasing heap usage in Instana
+            - OOMKilled pods in OpenShift
+            - Frequent GC pauses
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+private static final Map<String, Object> cache = new HashMap<>();
+
+public Object get(String key) {
+    return cache.computeIfAbsent(key, this::loadFromDatabase);
+    // Cache grows unbounded, never evicts entries
+}
+            ]]></bad>
+            <good><![CDATA[
+private static final Cache<String, Object> cache = CacheBuilder.newBuilder()
+    .maximumSize(10000)
+    .expireAfterWrite(1, TimeUnit.HOURS)
+    .build();
+
+public Object get(String key) {
+    return cache.get(key, this::loadFromDatabase);
+}
+            ]]></good>
+          </code_examples>
+          <search_patterns>
+            <pattern>new HashMap.*\(\).*(?!.*maximumSize|expireAfter)</pattern>
+            <pattern>static.*Map.*=.*new</pattern>
+          </search_patterns>
+        </anti_pattern>
+
+        <anti_pattern name="thread_pool_exhaustion">
+          <description>Creating threads without limits or using unbounded executors</description>
+          <symptoms>
+            - High thread count in Instana
+            - CPU saturation
+            - OutOfMemoryError: unable to create new native thread
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+ExecutorService executor = Executors.newCachedThreadPool();
+// Unbounded thread pool, can create unlimited threads
+            ]]></bad>
+            <good><![CDATA[
+ExecutorService executor = new ThreadPoolExecutor(
+    10, // core pool size
+    50, // maximum pool size
+    60L, TimeUnit.SECONDS,
+    new LinkedBlockingQueue<>(1000), // bounded queue
+    new ThreadPoolExecutor.CallerRunsPolicy() // rejection policy
+);
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="file_handle_leaks">
+          <description>Not closing file streams or readers</description>
+          <symptoms>
+            - "Too many open files" errors
+            - File descriptor exhaustion
+            - Application hangs
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+FileInputStream fis = new FileInputStream(file);
+byte[] data = fis.readAllBytes();
+// Stream not closed
+            ]]></bad>
+            <good><![CDATA[
+try (FileInputStream fis = new FileInputStream(file)) {
+    byte[] data = fis.readAllBytes();
+} // Automatically closed
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+      </anti_patterns>
+
+      <checklist>
+        <item>Are all resources (connections, streams, readers) closed properly?</item>
+        <item>Is try-with-resources used for AutoCloseable resources?</item>
+        <item>Are caches bounded with eviction policies?</item>
+        <item>Are thread pools configured with appropriate limits?</item>
+        <item>Are there any static collections that grow unbounded?</item>
+        <item>Is memory usage monitored and managed?</item>
+      </checklist>
+    </category>
+
+    <category name="database_interactions">
+      <description>
+        Examine database queries, connection management, and transaction handling
+      </description>
+
+      <anti_patterns>
+        <anti_pattern name="n_plus_one_queries">
+          <description>Executing N queries in a loop instead of one query</description>
+          <symptoms>
+            - High database call count in Instana
+            - Slow endpoint latency
+            - Database connection pool exhaustion
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+List<Order> orders = orderRepository.findAll();
+for (Order order : orders) {
+    Customer customer = customerRepository.findById(order.getCustomerId());
+    // N+1 queries: 1 for orders + N for customers
+}
+            ]]></bad>
+            <good><![CDATA[
+List<Order> orders = orderRepository.findAllWithCustomers();
+// Single query with JOIN to fetch orders and customers
+            ]]></good>
+          </code_examples>
+          <search_patterns>
+            <pattern>for.*\{.*repository\.find.*\}</pattern>
+            <pattern>forEach.*repository\.find</pattern>
+          </search_patterns>
+        </anti_pattern>
+
+        <anti_pattern name="missing_indexes">
+          <description>Queries on unindexed columns</description>
+          <symptoms>
+            - Slow query warnings in logs
+            - High database CPU in Instana
+            - Increasing query latency
+          </symptoms>
+          <detection>
+            - Look for WHERE clauses on columns without indexes
+            - Check for queries on large tables without indexes
+            - Review database slow query logs
+          </detection>
+        </anti_pattern>
+
+        <anti_pattern name="large_result_sets">
+          <description>Loading large result sets without pagination</description>
+          <symptoms>
+            - High memory usage
+            - OOMKilled pods
+            - Slow response times
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+List<Order> orders = orderRepository.findAll();
+// Loads all orders into memory
+            ]]></bad>
+            <good><![CDATA[
+Page<Order> orders = orderRepository.findAll(
+    PageRequest.of(page, size, Sort.by("createdAt").descending())
+);
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="long_transactions">
+          <description>Transactions held open for too long</description>
+          <symptoms>
+            - Database lock contention
+            - Deadlocks
+            - Slow transaction commits
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+@Transactional
+public void processOrder(Order order) {
+    validateOrder(order); // External API call in transaction
+    sendEmail(order); // Email sending in transaction
+    updateDatabase(order);
+}
+            ]]></bad>
+            <good><![CDATA[
+public void processOrder(Order order) {
+    validateOrder(order); // Outside transaction
+    sendEmail(order); // Outside transaction
+    
+    updateOrderInTransaction(order); // Only DB update in transaction
+}
+
+@Transactional
+private void updateOrderInTransaction(Order order) {
+    orderRepository.save(order);
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="connection_pool_misconfiguration">
+          <description>Connection pool size too small or too large</description>
+          <symptoms>
+            - Connection timeout errors
+            - "Waiting for connection" messages
+            - Database connection exhaustion
+          </symptoms>
+          <configuration_checks>
+            <check>Pool size appropriate for load (typically 10-50)</check>
+            <check>Max lifetime configured (prevent stale connections)</check>
+            <check>Connection timeout configured</check>
+            <check>Idle timeout configured</check>
+          </configuration_checks>
+        </anti_pattern>
+      </anti_patterns>
+
+      <checklist>
+        <item>Are queries optimized to avoid N+1 problems?</item>
+        <item>Are appropriate indexes defined for query patterns?</item>
+        <item>Is pagination used for large result sets?</item>
+        <item>Are transactions kept short and focused?</item>
+        <item>Is connection pool properly configured?</item>
+        <item>Are prepared statements used to prevent SQL injection?</item>
+      </checklist>
+    </category>
+
+    <category name="concurrency_issues">
+      <description>
+        Examine thread safety, synchronization, and concurrent access patterns
+      </description>
+
+      <anti_patterns>
+        <anti_pattern name="race_conditions">
+          <description>Unsynchronized access to shared mutable state</description>
+          <symptoms>
+            - Intermittent data corruption
+            - Inconsistent state
+            - Hard-to-reproduce bugs
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+private int counter = 0;
+
+public void increment() {
+    counter++; // Not thread-safe
+}
+            ]]></bad>
+            <good><![CDATA[
+private final AtomicInteger counter = new AtomicInteger(0);
+
+public void increment() {
+    counter.incrementAndGet(); // Thread-safe
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="deadlocks">
+          <description>Circular lock dependencies</description>
+          <symptoms>
+            - Application hangs
+            - Threads blocked indefinitely
+            - Thread dumps show circular waits
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+synchronized(lock1) {
+    synchronized(lock2) {
+        // Thread 1 holds lock1, waits for lock2
+    }
+}
+// Meanwhile, Thread 2:
+synchronized(lock2) {
+    synchronized(lock1) {
+        // Thread 2 holds lock2, waits for lock1
+    }
+}
+            ]]></bad>
+            <good><![CDATA[
+// Always acquire locks in same order
+synchronized(lock1) {
+    synchronized(lock2) {
+        // Both threads acquire in same order
+    }
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="blocking_on_event_loop">
+          <description>Blocking operations on async/reactive event loops</description>
+          <symptoms>
+            - Thread starvation
+            - Poor throughput
+            - High latency
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+// In reactive/async framework
+public Mono<String> getData() {
+    return Mono.fromCallable(() -> {
+        Thread.sleep(1000); // Blocking on event loop thread
+        return database.query();
+    });
+}
+            ]]></bad>
+            <good><![CDATA[
+public Mono<String> getData() {
+    return Mono.fromCallable(() -> database.query())
+        .subscribeOn(Schedulers.boundedElastic()); // Use separate thread pool
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="improper_locking">
+          <description>Locks held too long or too coarse-grained</description>
+          <symptoms>
+            - Lock contention
+            - Poor concurrency
+            - Reduced throughput
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+synchronized(this) {
+    // Entire method synchronized
+    validateData();
+    processData();
+    saveToDatabase();
+    sendNotification();
+}
+            ]]></bad>
+            <good><![CDATA[
+validateData(); // No lock needed
+processData(); // No lock needed
+
+synchronized(this) {
+    saveToDatabase(); // Only critical section locked
+}
+
+sendNotification(); // No lock needed
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+      </anti_patterns>
+
+      <checklist>
+        <item>Is shared mutable state properly synchronized?</item>
+        <item>Are thread-safe collections used where appropriate?</item>
+        <item>Are locks acquired in consistent order to prevent deadlocks?</item>
+        <item>Are blocking operations moved off event loop threads?</item>
+        <item>Are locks held for minimal time?</item>
+        <item>Are immutable objects used where possible?</item>
+      </checklist>
+    </category>
+
+    <category name="configuration_issues">
+      <description>
+        Examine application configuration, environment variables, and settings
+      </description>
+
+      <anti_patterns>
+        <anti_pattern name="hardcoded_values">
+          <description>Configuration values hardcoded instead of externalized</description>
+          <symptoms>
+            - Different behavior across environments
+            - Difficult to change settings
+            - Requires code changes for config updates
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+private static final String API_URL = "https://api.production.com";
+private static final int TIMEOUT = 5000;
+            ]]></bad>
+            <good><![CDATA[
+@Value("${api.url}")
+private String apiUrl;
+
+@Value("${api.timeout:5000}")
+private int timeout;
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="missing_environment_validation">
+          <description>Not validating required configuration at startup</description>
+          <symptoms>
+            - Runtime failures due to missing config
+            - Pods crash after deployment
+            - Difficult to diagnose config issues
+          </symptoms>
+          <code_examples>
+            <good><![CDATA[
+@PostConstruct
+public void validateConfiguration() {
+    if (apiUrl == null || apiUrl.isEmpty()) {
+        throw new IllegalStateException("api.url must be configured");
+    }
+    if (timeout <= 0) {
+        throw new IllegalStateException("api.timeout must be positive");
+    }
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+
+        <anti_pattern name="incorrect_resource_limits">
+          <description>JVM heap size or other limits not matching container limits</description>
+          <symptoms>
+            - OOMKilled despite available memory
+            - Poor GC performance
+            - Inefficient resource usage
+          </symptoms>
+          <configuration_checks>
+            <check>JVM -Xmx should be ~75% of container memory limit</check>
+            <check>Thread pool sizes appropriate for CPU limits</check>
+            <check>Connection pool sizes appropriate for load</check>
+          </configuration_checks>
+        </anti_pattern>
+
+        <anti_pattern name="missing_retry_configuration">
+          <description>No retry logic or exponential backoff for transient failures</description>
+          <symptoms>
+            - Failures on transient errors
+            - Retry storms amplifying issues
+            - Cascading failures
+          </symptoms>
+          <code_examples>
+            <bad><![CDATA[
+public String callExternalApi() {
+    return httpClient.get(url); // No retry on failure
+}
+            ]]></bad>
+            <good><![CDATA[
+@Retryable(
+    value = {HttpTimeoutException.class, ConnectException.class},
+    maxAttempts = 3,
+    backoff = @Backoff(delay = 1000, multiplier = 2)
+)
+public String callExternalApi() {
+    return httpClient.get(url);
+}
+            ]]></good>
+          </code_examples>
+        </anti_pattern>
+      </anti_patterns>
+
+      <checklist>
+        <item>Are all configuration values externalized?</item>
+        <item>Is required configuration validated at startup?</item>
+        <item>Are resource limits (heap, threads, connections) properly configured?</item>
+        <item>Are retry policies configured with exponential backoff?</item>
+        <item>Are circuit breakers configured for external dependencies?</item>
+        <item>Are timeouts configured for all external calls?</item>
+      </checklist>
+    </category>
+
+    <category name="dependency_management">
+      <description>
+        Examine dependency versions, compatibility, and security vulnerabilities
+      </description>
+
+      <checks>
+        <check name="version_conflicts">
+          <description>Check for conflicting dependency versions</description>
+          <files_to_examine>
+            - pom.xml (Maven)
+            - build.gradle (Gradle)
+            - package.json (Node.js)
+            - requirements.txt (Python)
+          </files_to_examine>
+          <look_for>
+            - Multiple versions of same library
+            - Incompatible version combinations
+            - Transitive dependency conflicts
+          </look_for>
+        </check>
+
+        <check name="outdated_dependencies">
+          <description>Check for outdated or vulnerable dependencies</description>
+          <symptoms>
+            - Known security vulnerabilities
+            - Missing bug fixes
+            - Compatibility issues
+          </symptoms>
+          <tools>
+            - Maven: mvn versions:display-dependency-updates
+            - Gradle: gradle dependencyUpdates
+            - npm: npm outdated
+          </tools>
+        </check>
+
+        <check name="missing_dependencies">
+          <description>Check for missing runtime dependencies</description>
+          <symptoms>
+            - ClassNotFoundException at runtime
+            - NoClassDefFoundError
+            - Module not found errors
+          </symptoms>
+        </check>
+      </checks>
+    </category>
+  </analysis_categories>
+
+  <investigation_workflow>
+    <step number="1">
+      <title>Identify code areas from Instana traces</title>
+      <actions>
+        <action>Extract service names and endpoints from Instana errors</action>
+        <action>Identify slow spans and their associated code paths</action>
+        <action>Note specific error messages and stack traces</action>
+      </actions>
+    </step>
+
+    <step number="2">
+      <title>Locate relevant code files</title>
+      <tools>
+        <tool>search_files with error messages or class names</tool>
+        <tool>list_code_definition_names for service/controller classes</tool>
+      </tools>
+      <example><![CDATA[
+<search_files>
+<path>src</path>
+<regex>PaymentService|processPayment</regex>
+<file_pattern>*.java</file_pattern>
+</search_files>
+      ]]></example>
+    </step>
+
+    <step number="3">
+      <title>Read and analyze code</title>
+      <tools>
+        <tool>read_file to examine specific files</tool>
+      </tools>
+      <focus_areas>
+        - Error handling in the problematic code path
+        - Resource management (connections, streams)
+        - Database queries and transactions
+        - External API calls and timeouts
+        - Configuration usage
+      </focus_areas>
+    </step>
+
+    <step number="4">
+      <title>Check configuration files</title>
+      <files_to_examine>
+        - application.properties / application.yml
+        - ConfigMaps (from OpenShift)
+        - Environment variables
+        - Database connection settings
+        - Thread pool configurations
+      </files_to_examine>
+    </step>
+
+    <step number="5">
+      <title>Correlate code issues with symptoms</title>
+      <correlation_checks>
+        <check>Does missing timeout explain connection hangs in Instana?</check>
+        <check>Does unbounded cache explain OOMKills in OpenShift?</check>
+        <check>Does N+1 query explain high database calls in Instana?</check>
+        <check>Does missing error handling explain silent failures?</check>
+      </correlation_checks>
+    </step>
+  </investigation_workflow>
+
+  <reporting_guidelines>
+    <guideline name="cite_specific_locations">
+      <description>
+        Always provide exact file paths and line numbers for issues found
+      </description>
+      <example>
+        Found connection leak in src/main/java/com/example/PaymentService.java:45
+        where Connection is obtained but not closed in finally block.
+      </example>
+    </guideline>
+
+    <guideline name="include_code_snippets">
+      <description>
+        Include the problematic code snippet in the RCA report
+      </description>
+      <format>
+        Use code blocks with syntax highlighting and line numbers
+      </format>
+    </guideline>
+
+    <guideline name="explain_impact">
+      <description>
+        Explain how the code issue leads to the observed symptoms
+      </description>
+      <example>
+        The missing connection.close() in the finally block causes connections
+        to leak. Over time, this exhausts the connection pool (max 20 connections),
+        leading to "Timeout waiting for connection" errors seen in Instana traces
+        and "Too many connections" errors in pod logs.
+      </example>
+    </guideline>
+
+    <guideline name="provide_fix">
+      <description>
+        Provide specific code changes needed to fix the issue
+      </description>
+      <format>
+        Show before/after code or provide exact changes using apply_diff format
+      </format>
+    </guideline>
+  </reporting_guidelines>
+
+  <best_practices>
+    <practice>
+      <title>Focus on reliability patterns</title>
+      <description>
+        Prioritize issues that affect reliability: error handling, resource
+        management, timeouts, retries, circuit breakers
+      </description>
+    </practice>
+
+    <practice>
+      <title>Look for correlation with symptoms</title>
+      <description>
+        Don't just list code issues - explain how they cause the observed
+        problems in Instana and OpenShift
+      </description>
+    </practice>
+
+    <practice>
+      <title>Check recent changes</title>
+      <description>
+        If incident followed a deployment, focus on recently changed code
+        using git diff or deployment history
+      </description>
+    </practice>
+
+    <practice>
+      <title>Validate configuration</title>
+      <description>
+        Always check that configuration values (timeouts, pool sizes, limits)
+        are appropriate for the environment and load
+      </description>
+    </practice>
+
+    <practice>
+      <title>Consider the full request path</title>
+      <description>
+        Trace the request path from entry point through all layers
+        (controller → service → repository → database) to find issues
+      </description>
+    </practice>
+  </best_practices>
+</code_analysis_guide>
+
+<!-- Made with Bob -->

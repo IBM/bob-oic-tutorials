@@ -1,0 +1,570 @@
+<root_cause_methodology>
+  <overview>
+    Systematic hypothesis-driven approach to root cause analysis. This methodology
+    ensures thorough investigation by forming testable hypotheses, gathering evidence
+    from multiple sources, and validating theories before concluding on root causes.
+    
+    DATA SOURCE PRIORITY:
+    1. PRIMARY: Instana MCP tools for ALL metrics, services, and application data
+    2. SECONDARY: OpenShift diagnostics ONLY during root cause analysis to correlate
+       infrastructure state with Instana findings
+    3. TERTIARY: Code analysis to identify defects causing observed symptoms
+    
+    OpenShift commands are used to validate hypotheses formed from Instana data,
+    not as the primary investigation tool.
+  </overview>
+
+  <core_principles>
+    <principle name="evidence_based">
+      <description>
+        Every conclusion must be supported by concrete evidence from Instana,
+        OpenShift, or code analysis. Avoid speculation without data.
+      </description>
+      <requirements>
+        <requirement>Cite specific metrics, log entries, or code locations</requirement>
+        <requirement>Include timestamps for temporal correlation</requirement>
+        <requirement>Provide quantitative data (error rates, latency values, etc.)</requirement>
+      </requirements>
+    </principle>
+
+    <principle name="hypothesis_driven">
+      <description>
+        Form specific, testable hypotheses about potential root causes.
+        Systematically validate or refute each hypothesis with evidence.
+      </description>
+      <process>
+        <step>Observe symptoms and gather initial data</step>
+        <step>Form multiple competing hypotheses</step>
+        <step>Identify evidence that would support or refute each hypothesis</step>
+        <step>Gather that evidence systematically</step>
+        <step>Evaluate each hypothesis against the evidence</step>
+        <step>Conclude with the hypothesis best supported by evidence</step>
+      </process>
+    </principle>
+
+    <principle name="correlation_not_causation">
+      <description>
+        Distinguish between correlation and causation. Events occurring together
+        doesn't mean one caused the other. Establish causal chains.
+      </description>
+      <validation_questions>
+        <question>Does the timing make sense for causation?</question>
+        <question>Is there a plausible mechanism linking cause to effect?</question>
+        <question>Are there alternative explanations?</question>
+        <question>Can we reproduce the issue by recreating the cause?</question>
+      </validation_questions>
+    </principle>
+
+    <principle name="multiple_perspectives">
+      <description>
+        Examine the issue from multiple angles: application metrics, infrastructure
+        state, and code implementation. Root causes often span multiple layers.
+      </description>
+      <perspectives>
+        <perspective>Application layer (Instana traces, metrics, alerts)</perspective>
+        <perspective>Infrastructure layer (OpenShift pods, nodes, resources)</perspective>
+        <perspective>Code layer (implementation, configuration, dependencies)</perspective>
+      </perspectives>
+    </principle>
+
+    <principle name="proximate_vs_root">
+      <description>
+        Distinguish between proximate causes (immediate triggers) and root causes
+        (underlying conditions). Fix root causes to prevent recurrence.
+      </description>
+      <example>
+        Proximate: Pod OOMKilled
+        Root: Memory leak in unbounded cache
+        
+        Fixing proximate (increase memory limit) doesn't prevent recurrence.
+        Fixing root (add cache eviction policy) prevents future OOMKills.
+      </example>
+    </principle>
+  </core_principles>
+
+  <hypothesis_framework>
+    <hypothesis_template>
+      <structure>
+        <field name="hypothesis_statement">
+          <description>Clear, specific statement of what you believe caused the issue</description>
+          <format>"[Specific condition/defect] caused [observed symptom] by [mechanism]"</format>
+          <example>
+            "Unbounded cache in UserService caused OOMKills by accumulating user
+            objects without eviction, leading to heap exhaustion"
+          </example>
+        </field>
+
+        <field name="supporting_evidence">
+          <description>Evidence that supports this hypothesis</description>
+          <categories>
+            <category name="instana_evidence">
+              - Specific metrics showing the problem
+              - Traces demonstrating the behavior
+              - Alerts or incidents triggered
+              - Timeline of symptom progression
+            </category>
+            <category name="openshift_evidence">
+              - Pod events (OOMKilled, restarts, etc.)
+              - Resource utilization data
+              - Log entries showing errors
+              - Configuration settings
+            </category>
+            <category name="code_evidence">
+              - Specific code locations with issues
+              - Configuration values
+              - Dependency versions
+              - Recent code changes
+            </category>
+          </categories>
+        </field>
+
+        <field name="contradicting_evidence">
+          <description>Evidence that contradicts or weakens this hypothesis</description>
+          <importance>
+            Actively look for evidence against your hypothesis. This prevents
+            confirmation bias and ensures thorough analysis.
+          </importance>
+        </field>
+
+        <field name="alternative_explanations">
+          <description>Other hypotheses that could explain the same symptoms</description>
+          <purpose>
+            Consider multiple explanations to avoid premature conclusions
+          </purpose>
+        </field>
+
+        <field name="validation_test">
+          <description>How to definitively prove or disprove this hypothesis</description>
+          <examples>
+            <example>Check heap dump for cache size and object count</example>
+            <example>Review code for cache eviction policy</example>
+            <example>Correlate cache growth with memory increase in Instana</example>
+            <example>Test if adding eviction policy prevents OOMKills</example>
+          </examples>
+        </field>
+
+        <field name="confidence_level">
+          <description>Confidence in this hypothesis based on evidence</description>
+          <levels>
+            <level name="high">Strong evidence, no contradictions, mechanism clear</level>
+            <level name="medium">Good evidence, some gaps, plausible mechanism</level>
+            <level name="low">Limited evidence, contradictions exist, mechanism unclear</level>
+          </levels>
+        </field>
+
+        <field name="conclusion">
+          <description>Final determination on this hypothesis</description>
+          <options>
+            <option>Confirmed - This is the root cause</option>
+            <option>Refuted - Evidence contradicts this hypothesis</option>
+            <option>Possible - Plausible but needs more investigation</option>
+            <option>Contributing - Not root cause but exacerbates the issue</option>
+          </options>
+        </field>
+      </structure>
+    </hypothesis_template>
+
+    <hypothesis_categories>
+      <category name="resource_exhaustion">
+        <description>Issues caused by running out of resources</description>
+        <common_hypotheses>
+          <hypothesis>Memory leak causing OOMKills</hypothesis>
+          <hypothesis>Connection pool exhaustion causing timeouts</hypothesis>
+          <hypothesis>Thread pool exhaustion causing request queuing</hypothesis>
+          <hypothesis>Disk space exhaustion causing write failures</hypothesis>
+          <hypothesis>CPU saturation causing slow response times</hypothesis>
+        </common_hypotheses>
+        <key_evidence>
+          - Resource usage trends over time (increasing = leak)
+          - Resource limits vs actual usage
+          - Error messages indicating exhaustion
+          - Code showing unbounded resource usage
+        </key_evidence>
+      </category>
+
+      <category name="configuration_errors">
+        <description>Issues caused by incorrect configuration</description>
+        <common_hypotheses>
+          <hypothesis>Timeout too short causing premature failures</hypothesis>
+          <hypothesis>Pool size too small for load</hypothesis>
+          <hypothesis>Wrong environment variable value</hypothesis>
+          <hypothesis>Missing required configuration</hypothesis>
+          <hypothesis>Incompatible configuration between components</hypothesis>
+        </common_hypotheses>
+        <key_evidence>
+          - Configuration values from ConfigMaps/Secrets
+          - Environment variables in pods
+          - Application property files
+          - Comparison with working environments
+        </key_evidence>
+      </category>
+
+      <category name="code_defects">
+        <description>Issues caused by bugs or anti-patterns in code</description>
+        <common_hypotheses>
+          <hypothesis>Missing error handling causing silent failures</hypothesis>
+          <hypothesis>Race condition causing intermittent errors</hypothesis>
+          <hypothesis>N+1 query causing performance degradation</hypothesis>
+          <hypothesis>Blocking operation on event loop causing thread starvation</hypothesis>
+          <hypothesis>Missing timeout causing hanging requests</hypothesis>
+        </common_hypotheses>
+        <key_evidence>
+          - Specific code locations with issues
+          - Stack traces from errors
+          - Slow spans in traces pointing to code
+          - Recent code changes
+        </key_evidence>
+      </category>
+
+      <category name="external_dependencies">
+        <description>Issues caused by external service failures or degradation</description>
+        <common_hypotheses>
+          <hypothesis>Database slowdown causing cascading latency</hypothesis>
+          <hypothesis>External API failure causing errors</hypothesis>
+          <hypothesis>Network issues causing timeouts</hypothesis>
+          <hypothesis>DNS resolution failures causing connection errors</hypothesis>
+        </common_hypotheses>
+        <key_evidence>
+          - Traces showing slow/failed external calls
+          - Error messages indicating external failures
+          - Correlation with external service incidents
+          - Network connectivity tests
+        </key_evidence>
+      </category>
+
+      <category name="deployment_issues">
+        <description>Issues introduced by recent deployments or changes</description>
+        <common_hypotheses>
+          <hypothesis>New code version introduced bug</hypothesis>
+          <hypothesis>Configuration change broke functionality</hypothesis>
+          <hypothesis>Dependency update caused incompatibility</hypothesis>
+          <hypothesis>Resource limit change caused OOMKills</hypothesis>
+        </common_hypotheses>
+        <key_evidence>
+          - Deployment timing vs incident start
+          - Rollout history and changes
+          - Git diff of recent changes
+          - Change events in Instana
+        </key_evidence>
+      </category>
+
+      <category name="scaling_issues">
+        <description>Issues that emerge under load or at scale</description>
+        <common_hypotheses>
+          <hypothesis>Insufficient replicas for load</hypothesis>
+          <hypothesis>Resource contention under high load</hypothesis>
+          <hypothesis>Lock contention at scale</hypothesis>
+          <hypothesis>Database connection pool too small for load</hypothesis>
+        </common_hypotheses>
+        <key_evidence>
+          - Load patterns vs error rates
+          - Resource utilization under load
+          - Number of replicas vs request volume
+          - Concurrency-related errors
+        </key_evidence>
+      </category>
+    </hypothesis_categories>
+  </hypothesis_framework>
+
+  <investigation_process>
+    <phase name="symptom_analysis">
+      <title>Phase 1: Analyze Symptoms (USE INSTANA)</title>
+      <objective>
+        Understand what is failing, when it started, and what the impact is.
+        
+        CRITICAL: Use Instana MCP tools for this phase:
+        - manage_events for incidents and issues
+        - manage_applications for service metrics
+        - analyze_infrastructure for infrastructure metrics
+      </objective>
+      <questions_to_answer>
+        <question>What is the primary symptom? (errors, latency, crashes, etc.)</question>
+        <question>When did it start? (exact timestamp)</question>
+        <question>What is the scope? (which services, endpoints, users affected)</question>
+        <question>What is the severity? (error rate, latency increase, downtime)</question>
+        <question>Is it ongoing or resolved?</question>
+        <question>Are there any patterns? (time-based, load-based, intermittent)</question>
+      </questions_to_answer>
+      <data_sources>
+        <source>Instana incidents and alerts</source>
+        <source>Application metrics (error rates, latency)</source>
+        <source>OpenShift pod status and events</source>
+      </data_sources>
+    </phase>
+
+    <phase name="hypothesis_generation">
+      <title>Phase 2: Generate Hypotheses</title>
+      <objective>
+        Form multiple competing hypotheses about potential root causes
+      </objective>
+      <approach>
+        <step>Based on symptoms, identify likely categories (resource, config, code, etc.)</step>
+        <step>For each category, list specific hypotheses</step>
+        <step>Prioritize hypotheses by likelihood and impact</step>
+        <step>Ensure hypotheses are specific and testable</step>
+      </approach>
+      <guidelines>
+        <guideline>Generate at least 3-5 hypotheses initially</guideline>
+        <guideline>Don't prematurely dismiss unlikely hypotheses</guideline>
+        <guideline>Consider both technical and operational causes</guideline>
+        <guideline>Think about recent changes as potential triggers</guideline>
+      </guidelines>
+    </phase>
+
+    <phase name="evidence_gathering">
+      <title>Phase 3: Gather Evidence</title>
+      <objective>
+        Systematically collect data to validate or refute each hypothesis.
+        
+        EVIDENCE GATHERING ORDER:
+        1. FIRST: Gather evidence from Instana (metrics, traces, events)
+        2. THEN: If performing root cause analysis, use OpenShift to correlate
+           infrastructure state with Instana findings
+        3. FINALLY: Analyze code to identify defects
+      </objective>
+      <approach>
+        <step>For each hypothesis, identify what evidence would support or refute it</step>
+        <step>Gather that evidence from Instana, OpenShift, and code</step>
+        <step>Document findings with timestamps and specific values</step>
+        <step>Look for both supporting and contradicting evidence</step>
+      </approach>
+      <evidence_types>
+        <type name="temporal">
+          Timeline correlation - do events align temporally?
+        </type>
+        <type name="quantitative">
+          Metrics and measurements - do values support the hypothesis?
+        </type>
+        <type name="qualitative">
+          Log messages and errors - do they indicate the hypothesized issue?
+        </type>
+        <type name="structural">
+          Code and configuration - is the hypothesized defect present?
+        </type>
+      </evidence_types>
+    </phase>
+
+    <phase name="hypothesis_evaluation">
+      <title>Phase 4: Evaluate Hypotheses</title>
+      <objective>
+        Assess each hypothesis against the evidence and determine root cause
+      </objective>
+      <evaluation_criteria>
+        <criterion name="evidence_strength">
+          How strong is the supporting evidence?
+        </criterion>
+        <criterion name="mechanism_clarity">
+          Is the causal mechanism clear and plausible?
+        </criterion>
+        <criterion name="temporal_alignment">
+          Does the timing make sense?
+        </criterion>
+        <criterion name="completeness">
+          Does it explain all observed symptoms?
+        </criterion>
+        <criterion name="alternatives">
+          Are there better alternative explanations?
+        </criterion>
+      </evaluation_criteria>
+      <decision_process>
+        <step>Score each hypothesis on evaluation criteria</step>
+        <step>Identify hypothesis with strongest evidence</step>
+        <step>Check if it explains all symptoms</step>
+        <step>Verify causal mechanism is sound</step>
+        <step>Consider if multiple root causes exist</step>
+      </decision_process>
+    </phase>
+
+    <phase name="causation_chain">
+      <title>Phase 5: Establish Causation Chain</title>
+      <objective>
+        Document the complete chain from root cause to observed symptoms
+      </objective>
+      <chain_structure>
+        <link>Root Cause: The underlying defect or condition</link>
+        <link>Mechanism: How the root cause manifests</link>
+        <link>Proximate Cause: The immediate trigger</link>
+        <link>Symptoms: The observable effects</link>
+        <link>Impact: The business/user consequences</link>
+      </chain_structure>
+      <example>
+        <root_cause>
+          Unbounded cache in UserService (no eviction policy)
+        </root_cause>
+        <mechanism>
+          Cache accumulates user objects indefinitely as users log in
+        </mechanism>
+        <proximate_cause>
+          Heap memory exhausted after 10,000 unique users accessed system
+        </proximate_cause>
+        <symptoms>
+          - OOMKilled pods (Exit Code 137)
+          - Pod restarts every 2-3 hours
+          - 503 errors during pod restarts
+          - Latency spikes before crashes
+        </symptoms>
+        <impact>
+          - 15% of requests failed during pod restarts
+          - User login failures
+          - 30-minute total downtime over 24 hours
+        </impact>
+      </example>
+    </phase>
+
+    <phase name="validation">
+      <title>Phase 6: Validate Root Cause</title>
+      <objective>
+        Confirm the root cause through additional testing or analysis
+      </objective>
+      <validation_methods>
+        <method name="code_review">
+          Verify the defect exists in code at specified location
+        </method>
+        <method name="metric_correlation">
+          Confirm metrics align with hypothesized behavior
+        </method>
+        <method name="log_analysis">
+          Verify log messages support the hypothesis
+        </method>
+        <method name="reproduction">
+          If possible, reproduce the issue in test environment
+        </method>
+        <method name="fix_verification">
+          Verify proposed fix addresses the root cause
+        </method>
+      </validation_methods>
+    </phase>
+  </investigation_process>
+
+  <common_pitfalls>
+    <pitfall name="confirmation_bias">
+      <description>
+        Only looking for evidence that supports your initial hypothesis
+      </description>
+      <mitigation>
+        Actively seek evidence that contradicts your hypothesis. Consider
+        alternative explanations. Have others review your analysis.
+      </mitigation>
+    </pitfall>
+
+    <pitfall name="stopping_at_proximate_cause">
+      <description>
+        Identifying the immediate trigger but not the underlying root cause
+      </description>
+      <mitigation>
+        Always ask "why did this happen?" multiple times (5 Whys technique).
+        Distinguish between symptoms, proximate causes, and root causes.
+      </mitigation>
+    </pitfall>
+
+    <pitfall name="correlation_as_causation">
+      <description>
+        Assuming events that occur together are causally related
+      </description>
+      <mitigation>
+        Establish plausible causal mechanisms. Check temporal ordering.
+        Look for alternative explanations. Verify with additional evidence.
+      </mitigation>
+    </pitfall>
+
+    <pitfall name="single_source_reliance">
+      <description>
+        Relying on only one data source (e.g., only logs or only metrics)
+      </description>
+      <mitigation>
+        Always cross-reference multiple sources: Instana metrics, OpenShift
+        events, pod logs, and code analysis. Triangulate evidence.
+      </mitigation>
+    </pitfall>
+
+    <pitfall name="premature_conclusion">
+      <description>
+        Concluding on root cause before gathering sufficient evidence
+      </description>
+      <mitigation>
+        Follow the complete investigation process. Gather evidence for all
+        plausible hypotheses. Validate conclusions before finalizing.
+      </mitigation>
+    </pitfall>
+
+    <pitfall name="ignoring_context">
+      <description>
+        Not considering environmental factors, recent changes, or load patterns
+      </description>
+      <mitigation>
+        Always check: recent deployments, configuration changes, load patterns,
+        external dependencies, and environmental differences.
+      </mitigation>
+    </pitfall>
+  </common_pitfalls>
+
+  <documentation_requirements>
+    <requirement name="hypothesis_documentation">
+      <description>
+        Document all hypotheses considered, not just the final conclusion
+      </description>
+      <rationale>
+        Shows thoroughness of investigation and helps others understand
+        the reasoning process
+      </rationale>
+    </requirement>
+
+    <requirement name="evidence_citation">
+      <description>
+        Cite specific evidence for all claims
+      </description>
+      <format>
+        - Metric values with timestamps
+        - Log entries with timestamps and pod names
+        - Code locations with file paths and line numbers
+        - Event descriptions with timestamps
+      </format>
+    </requirement>
+
+    <requirement name="causation_chain">
+      <description>
+        Document the complete chain from root cause to symptoms
+      </description>
+      <purpose>
+        Demonstrates understanding of how the issue manifested and
+        validates that the identified root cause explains all symptoms
+      </purpose>
+    </requirement>
+
+    <requirement name="confidence_assessment">
+      <description>
+        State confidence level in the root cause determination
+      </description>
+      <levels>
+        <level>High: Strong evidence, clear mechanism, validated</level>
+        <level>Medium: Good evidence, plausible mechanism, some gaps</level>
+        <level>Low: Limited evidence, unclear mechanism, needs more investigation</level>
+      </levels>
+    </requirement>
+
+    <requirement name="alternative_explanations">
+      <description>
+        Document alternative hypotheses considered and why they were ruled out
+      </description>
+      <purpose>
+        Demonstrates thorough analysis and helps prevent future
+        misdiagnosis of similar issues
+      </purpose>
+    </requirement>
+  </documentation_requirements>
+
+  <quality_checklist>
+    <check>Have I gathered evidence from all three sources (Instana, OpenShift, code)?</check>
+    <check>Have I considered multiple hypotheses, not just the first one?</check>
+    <check>Have I looked for contradicting evidence, not just supporting evidence?</check>
+    <check>Does the root cause explain ALL observed symptoms?</check>
+    <check>Is the causal mechanism clear and plausible?</check>
+    <check>Have I distinguished between root cause and proximate cause?</check>
+    <check>Have I validated the root cause with multiple evidence types?</check>
+    <check>Have I documented specific evidence with timestamps and locations?</check>
+    <check>Have I considered recent changes as potential triggers?</check>
+    <check>Would the proposed fix prevent recurrence of the issue?</check>
+  </quality_checklist>
+</root_cause_methodology>
+
+<!-- Made with Bob -->

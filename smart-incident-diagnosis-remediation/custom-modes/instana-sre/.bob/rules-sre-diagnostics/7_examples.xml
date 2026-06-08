@@ -1,0 +1,631 @@
+<diagnostic_examples>
+  <overview>
+    Complete end-to-end examples demonstrating the SRE Diagnostics workflow
+    for common incident scenarios. Each example shows the full investigation
+    process from symptom identification through root cause analysis to resolution.
+  </overview>
+
+  <example name="memory_leak_oomkill">
+    <title>Memory Leak Causing OOMKilled Pods</title>
+    <scenario>
+      Payment service pods are crashing every 2-3 hours with OOMKilled status.
+      Error rate spikes to 15% during crashes. Users report intermittent payment failures.
+    </scenario>
+
+    <phase_1_instana>
+      <title>Phase 1: Instana Analysis</title>
+      <steps>
+        <step number="1">
+          <action>Query recent incidents</action>
+          <tool_use><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_events</tool_name>
+<arguments>
+{
+  "operation": "get_incidents",
+  "params": {
+    "time_range": "last 24 hours",
+    "filter_event_updates": true
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></tool_use>
+          <findings>
+            - 8 incidents in last 24 hours
+            - All related to payment-service
+            - Pattern: incidents every 2-3 hours
+            - Each incident lasts 5-10 minutes
+          </findings>
+        </step>
+
+        <step number="2">
+          <action>Analyze application metrics</action>
+          <tool_use><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>manage_applications</tool_name>
+<arguments>
+{
+  "resource_type": "metrics",
+  "operation": "application",
+  "params": {
+    "tag_filter_expression": {
+      "type": "TAG_FILTER",
+      "name": "service.name",
+      "operator": "EQUALS",
+      "entity": "DESTINATION",
+      "value": "payment-service"
+    },
+    "metrics": [
+      {"metric": "calls", "aggregation": "SUM"},
+      {"metric": "errors", "aggregation": "SUM"},
+      {"metric": "latency", "aggregation": "P99"}
+    ],
+    "time_frame": "24h"
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></tool_use>
+          <findings>
+            - Error rate spikes from 0.1% to 15% during incidents
+            - P99 latency increases from 500ms to 8000ms
+            - Call volume normal (no traffic spike)
+          </findings>
+        </step>
+
+        <step number="3">
+          <action>Check infrastructure metrics</action>
+          <tool_use><![CDATA[
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>analyze_infrastructure</tool_name>
+<arguments>
+{
+  "intent": "JVM heap usage for payment service",
+  "entity": "jvm"
+}
+</arguments>
+</use_mcp_tool>
+
+<!-- Then use returned schema -->
+<use_mcp_tool>
+<server_name>instana</server_name>
+<tool_name>analyze_infrastructure</tool_name>
+<arguments>
+{
+  "selections": {
+    "entity_type": "jvmRuntimePlatform",
+    "metrics": ["jvm.heap.used", "jvm.heap.maxSize", "jvm.gc.minorTime"],
+    "aggregation": "max",
+    "filters": [
+      {"name": "service.name", "value": "payment-service"}
+    ],
+    "timeRange": "24h"
+  }
+}
+</arguments>
+</use_mcp_tool>
+          ]]></tool_use>
+          <findings>
+            - Heap usage shows sawtooth pattern
+            - Heap grows from 500MB to 1.9GB over 2-3 hours
+            - Sudden drop to 200MB (pod restart)
+            - Pattern repeats consistently
+            - GC pause times increase before crashes
+          </findings>
+        </step>
+      </steps>
+
+      <hypothesis_formed>
+        Memory leak in payment-service causing heap exhaustion and OOMKills
+      </hypothesis_formed>
+    </phase_1_instana>
+
+    <phase_2_openshift>
+      <title>Phase 2: OpenShift Investigation</title>
+      <steps>
+        <step number="1">
+          <action>Check pod status and restarts</action>
+          <command><![CDATA[
+<execute_command>
+<command>oc get pods -n production -l app=payment-service</command>
+</execute_command>
+          ]]></command>
+          <output>
+            NAME                              READY   STATUS    RESTARTS   AGE
+            payment-service-7d8f9c-xk2lp     1/1     Running   8          24h
+            payment-service-7d8f9c-mn4pq     1/1     Running   7          24h
+            payment-service-7d8f9c-zt9wx     1/1     Running   8          24h
+          </output>
+          <findings>
+            - All 3 pods have 7-8 restarts in 24 hours
+            - Confirms 2-3 hour restart pattern
+          </findings>
+        </step>
+
+        <step number="2">
+          <action>Examine pod events</action>
+          <command><![CDATA[
+<execute_command>
+<command>oc describe pod payment-service-7d8f9c-xk2lp -n production</command>
+</execute_command>
+          ]]></command>
+          <key_findings>
+            Events:
+              Type     Reason     Age                  Message
+              ----     ------     ----                 -------
+              Normal   Killing    2h ago               Stopping container payment-service
+              Warning  BackOff    2h ago               Back-off restarting failed container
+              Normal   Pulled     2h ago               Container image pulled
+              Normal   Created    2h ago               Created container payment-service
+              Normal   Started    2h ago               Started container payment-service
+            
+            Last State:     Terminated
+              Reason:       OOMKilled
+              Exit Code:    137
+              Started:      2h ago
+              Finished:     2h ago
+          </key_findings>
+          <findings>
+            - Exit Code 137 confirms OOMKilled
+            - Kubernetes killed container due to memory limit
+          </findings>
+        </step>
+
+        <step number="3">
+          <action>Check resource limits</action>
+          <command><![CDATA[
+<execute_command>
+<command>oc get pod payment-service-7d8f9c-xk2lp -n production -o yaml | grep -A 5 resources</command>
+</execute_command>
+          ]]></command>
+          <output>
+            resources:
+              limits:
+                cpu: "2"
+                memory: 2Gi
+              requests:
+                cpu: "1"
+                memory: 1Gi
+          </output>
+          <findings>
+            - Memory limit: 2Gi
+            - Heap reaching limit before OOMKill
+            - Limit was adequate for previous versions
+          </findings>
+        </step>
+
+        <step number="4">
+          <action>Review pod logs</action>
+          <command><![CDATA[
+<execute_command>
+<command>oc logs payment-service-7d8f9c-xk2lp -n production --previous --tail=100</command>
+</execute_command>
+          ]]></command>
+          <key_log_entries>
+            2026-03-15 14:25:29.847 ERROR OutOfMemoryError: Java heap space
+            2026-03-15 14:25:29.848 ERROR at java.util.HashMap.resize(HashMap.java:704)
+            2026-03-15 14:25:29.849 ERROR at com.example.UserSessionCache.put(UserSessionCache.java:45)
+          </key_log_entries>
+          <findings>
+            - OutOfMemoryError in UserSessionCache
+            - HashMap.resize() indicates growing collection
+            - Points to specific code location
+          </findings>
+        </step>
+      </steps>
+
+      <correlation>
+        OpenShift findings correlate with Instana:
+        - OOMKill timing matches error spikes in Instana
+        - Heap exhaustion pattern matches infrastructure metrics
+        - 2-3 hour cycle consistent across both sources
+      </correlation>
+    </phase_2_openshift>
+
+    <phase_3_code_analysis>
+      <title>Phase 3: Code Analysis</title>
+      <steps>
+        <step number="1">
+          <action>Locate UserSessionCache class</action>
+          <tool_use><![CDATA[
+<search_files>
+<path>src</path>
+<regex>UserSessionCache</regex>
+<file_pattern>*.java</file_pattern>
+</search_files>
+          ]]></tool_use>
+          <findings>
+            Found: src/main/java/com/example/cache/UserSessionCache.java
+          </findings>
+        </step>
+
+        <step number="2">
+          <action>Read and analyze the code</action>
+          <tool_use><![CDATA[
+<read_file>
+<args>
+  <file>
+    <path>src/main/java/com/example/cache/UserSessionCache.java</path>
+  </file>
+</args>
+</read_file>
+          ]]></tool_use>
+          <code_found><![CDATA[
+public class UserSessionCache {
+    private static final Map<String, UserSession> cache = new HashMap<>();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);  // Line 45 - from stack trace
+    }
+    
+    public UserSession get(String userId) {
+        return cache.get(userId);
+    }
+    
+    public int size() {
+        return cache.size();
+    }
+}
+          ]]></code_found>
+          <issues_identified>
+            1. Unbounded HashMap - no size limit
+            2. No eviction policy - entries never removed
+            3. Static field - shared across all requests
+            4. No time-based expiration
+            5. Each UserSession ~2KB, accumulates indefinitely
+          </issues_identified>
+        </step>
+
+        <step number="3">
+          <action>Check when this was introduced</action>
+          <tool_use><![CDATA[
+<execute_command>
+<command>git log --oneline --all -- src/main/java/com/example/cache/UserSessionCache.java</command>
+</execute_command>
+          ]]></tool_use>
+          <findings>
+            abc123d Add UserSessionCache for performance improvement (2 days ago)
+            
+            Cache added in recent deployment, explains timing of incidents
+          </findings>
+        </step>
+
+        <step number="4">
+          <action>Check deployment history</action>
+          <tool_use><![CDATA[
+<execute_command>
+<command>oc rollout history deployment/payment-service -n production</command>
+</execute_command>
+          ]]></tool_use>
+          <findings>
+            REVISION  CHANGE-CAUSE
+            1         Initial deployment
+            2         Version 2.2.0 - stable
+            3         Version 2.3.0 - added UserSessionCache (2 days ago)
+            
+            Incidents started after v2.3.0 deployment
+          </findings>
+        </step>
+      </steps>
+
+      <root_cause_confirmed>
+        Unbounded HashMap in UserSessionCache accumulates user sessions without
+        eviction, causing memory leak. After ~900,000 unique logins (2-3 hours
+        at current traffic), heap exhausts and pod is OOMKilled.
+      </root_cause_confirmed>
+    </phase_3_code_analysis>
+
+    <resolution>
+      <immediate_fix>
+        <description>Replace HashMap with Guava Cache with eviction policy</description>
+        <code_change><![CDATA[
+<apply_diff>
+<path>src/main/java/com/example/cache/UserSessionCache.java</path>
+<diff>
+<<<<<<< SEARCH
+:start_line:10
+-------
+public class UserSessionCache {
+    private static final Map<String, UserSession> cache = new HashMap<>();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);
+    }
+    
+    public UserSession get(String userId) {
+        return cache.get(userId);
+    }
+=======
+public class UserSessionCache {
+    private static final Cache<String, UserSession> cache = CacheBuilder.newBuilder()
+        .maximumSize(10000)
+        .expireAfterWrite(1, TimeUnit.HOURS)
+        .expireAfterAccess(30, TimeUnit.MINUTES)
+        .recordStats()
+        .build();
+    
+    public void put(String userId, UserSession session) {
+        cache.put(userId, session);
+    }
+    
+    public UserSession get(String userId) {
+        return cache.getIfPresent(userId);
+    }
+    
+    public CacheStats getStats() {
+        return cache.stats();
+    }
+>>>>>>> REPLACE
+</diff>
+</apply_diff>
+        ]]></code_change>
+      </immediate_fix>
+
+      <verification>
+        - Deploy fix as v2.3.1
+        - Monitor heap usage for 6 hours
+        - Confirm no pod restarts
+        - Verify stable memory at ~45% of limit
+      </verification>
+    </resolution>
+
+    <rca_report>
+      <summary>
+        Payment service experienced recurring outages due to memory leak in
+        UserSessionCache. Unbounded HashMap accumulated user sessions without
+        eviction, causing OOMKills every 2-3 hours. Fixed by implementing
+        cache eviction policy with size and time limits.
+      </summary>
+    </rca_report>
+  </example>
+
+  <example name="database_connection_pool_exhaustion">
+    <title>Database Connection Pool Exhaustion</title>
+    <scenario>
+      Order API experiencing intermittent timeouts and "Connection timeout" errors.
+      Latency spikes during peak hours. Database appears healthy.
+    </scenario>
+
+    <phase_1_instana>
+      <title>Phase 1: Instana Analysis</title>
+      <steps>
+        <step number="1">
+          <action>Analyze error patterns</action>
+          <findings>
+            - "Connection timeout" errors in traces
+            - Errors correlate with high request volume
+            - Latency P99 increases from 200ms to 15,000ms
+            - Database query times normal (50-100ms)
+          </findings>
+        </step>
+
+        <step number="2">
+          <action>Examine slow traces</action>
+          <findings>
+            - Most time spent waiting for database connection
+            - Actual query execution fast once connection obtained
+            - "Timeout waiting for connection from pool" messages
+          </findings>
+        </step>
+      </steps>
+
+      <hypothesis_formed>
+        Connection pool exhaustion causing requests to wait for available connections
+      </hypothesis_formed>
+    </phase_1_instana>
+
+    <phase_2_openshift>
+      <title>Phase 2: OpenShift Investigation</title>
+      <steps>
+        <step number="1">
+          <action>Check pod logs during high load</action>
+          <findings>
+            HikariPool-1 - Connection is not available, request timed out after 30000ms
+            Active connections: 20, Idle connections: 0, Waiting threads: 45
+          </findings>
+        </step>
+
+        <step number="2">
+          <action>Review configuration</action>
+          <command><![CDATA[
+<execute_command>
+<command>oc get configmap order-api-config -n production -o yaml</command>
+</execute_command>
+          ]]></command>
+          <findings>
+            spring.datasource.hikari.maximum-pool-size: 20
+            spring.datasource.hikari.minimum-idle: 5
+            
+            Pool size of 20 insufficient for load (100+ concurrent requests)
+          </findings>
+        </step>
+      </steps>
+    </phase_2_openshift>
+
+    <phase_3_code_analysis>
+      <title>Phase 3: Code Analysis</title>
+      <steps>
+        <step number="1">
+          <action>Check for connection leaks</action>
+          <tool_use><![CDATA[
+<search_files>
+<path>src</path>
+<regex>getConnection.*(?!try-with-resources)</regex>
+<file_pattern>*.java</file_pattern>
+</search_files>
+          ]]></tool_use>
+          <findings>
+            No connection leaks found - all connections properly closed
+          </findings>
+        </step>
+
+        <step number="2">
+          <action>Analyze connection usage patterns</action>
+          <findings>
+            - Each request uses 1 connection
+            - Connections held for ~100ms average
+            - No long-running transactions
+            - Pool size (20) too small for concurrent load (100+ requests)
+          </findings>
+        </step>
+      </steps>
+
+      <root_cause_confirmed>
+        Connection pool size (20) insufficient for peak load. With 100+ concurrent
+        requests and 100ms average connection hold time, pool exhausts and requests
+        timeout waiting for connections.
+      </root_cause_confirmed>
+    </phase_3_code_analysis>
+
+    <resolution>
+      <immediate_fix>
+        <description>Increase connection pool size based on load analysis</description>
+        <calculation>
+          Peak concurrent requests: 120
+          Average connection hold time: 100ms
+          Required pool size: 120 * 0.1 = 12 (minimum)
+          Recommended: 50 (with buffer for spikes)
+        </calculation>
+        <config_change><![CDATA[
+<apply_diff>
+<path>config/application.yml</path>
+<diff>
+<<<<<<< SEARCH
+:start_line:15
+-------
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+=======
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+>>>>>>> REPLACE
+</diff>
+</apply_diff>
+        ]]></config_change>
+      </immediate_fix>
+
+      <verification>
+        - Update ConfigMap with new pool size
+        - Restart pods to apply configuration
+        - Monitor connection pool metrics
+        - Verify no more timeout errors under load
+      </verification>
+    </resolution>
+  </example>
+
+  <example name="n_plus_one_query_performance">
+    <title>N+1 Query Problem Causing Performance Degradation</title>
+    <scenario>
+      Customer list endpoint extremely slow (10+ seconds). Database CPU high.
+      Instana shows thousands of database calls per request.
+    </scenario>
+
+    <phase_1_instana>
+      <title>Phase 1: Instana Analysis</title>
+      <findings>
+        - /api/customers endpoint P99 latency: 12,000ms
+        - Single request generates 1,000+ database calls
+        - Each call fast (5-10ms) but volume is excessive
+        - Pattern: 1 query for customers, then 1 query per customer for orders
+      </findings>
+    </phase_1_instana>
+
+    <phase_2_openshift>
+      <title>Phase 2: OpenShift Investigation</title>
+      <findings>
+        - Pods healthy, no crashes or restarts
+        - CPU usage high during slow requests
+        - Database logs show repeated similar queries
+      </findings>
+    </phase_2_openshift>
+
+    <phase_3_code_analysis>
+      <title>Phase 3: Code Analysis</title>
+      <code_found><![CDATA[
+@GetMapping("/customers")
+public List<CustomerDTO> getCustomers() {
+    List<Customer> customers = customerRepository.findAll();
+    return customers.stream()
+        .map(customer -> {
+            List<Order> orders = orderRepository.findByCustomerId(customer.getId());
+            return new CustomerDTO(customer, orders);
+        })
+        .collect(Collectors.toList());
+}
+      ]]></code_found>
+      <issues_identified>
+        Classic N+1 query problem:
+        - 1 query to fetch all customers
+        - N queries (one per customer) to fetch orders
+        - With 1000 customers = 1001 total queries
+      </issues_identified>
+
+      <root_cause_confirmed>
+        N+1 query anti-pattern in customer list endpoint. Each customer triggers
+        separate query for orders instead of using JOIN or batch fetch.
+      </root_cause_confirmed>
+    </phase_3_code_analysis>
+
+    <resolution>
+      <immediate_fix>
+        <description>Use JOIN FETCH to load customers with orders in single query</description>
+        <code_change><![CDATA[
+// Add to CustomerRepository
+@Query("SELECT c FROM Customer c LEFT JOIN FETCH c.orders")
+List<Customer> findAllWithOrders();
+
+// Update controller
+@GetMapping("/customers")
+public List<CustomerDTO> getCustomers() {
+    List<Customer> customers = customerRepository.findAllWithOrders();
+    return customers.stream()
+        .map(customer -> new CustomerDTO(customer, customer.getOrders()))
+        .collect(Collectors.toList());
+}
+        ]]></code_change>
+      </immediate_fix>
+
+      <verification>
+        - Deploy fix
+        - Verify single query in Instana traces
+        - Confirm latency reduced to ~200ms
+        - Monitor database CPU (should decrease significantly)
+      </verification>
+    </resolution>
+  </example>
+
+  <workflow_summary>
+    <common_pattern>
+      <step>Start with Instana to identify symptoms and patterns</step>
+      <step>Use OpenShift to correlate with infrastructure events</step>
+      <step>Analyze code to find root cause</step>
+      <step>Form and validate hypotheses with evidence</step>
+      <step>Implement targeted fix addressing root cause</step>
+      <step>Verify resolution with monitoring</step>
+      <step>Document in RCA report</step>
+    </common_pattern>
+
+    <key_principles>
+      <principle>Always gather evidence from all three sources</principle>
+      <principle>Form multiple hypotheses before concluding</principle>
+      <principle>Distinguish between symptoms and root causes</principle>
+      <principle>Validate fixes before considering incident resolved</principle>
+      <principle>Document thoroughly for future reference</principle>
+    </key_principles>
+  </workflow_summary>
+</diagnostic_examples>
+
+<!-- Made with Bob -->
