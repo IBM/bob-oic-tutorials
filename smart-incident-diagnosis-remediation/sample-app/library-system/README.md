@@ -29,7 +29,7 @@ This guide explains how to build Docker images and deploy the Library System app
 ## Quick Start
 
 ### Step 1: Build and Push Images to Docker Hub
-**Note:** If you are planning to just deploy the application without making changes, you can skip this step and go directly to "Step 2: Deploy to OpenShift".
+**Note**: If you are planning to just deploy the application without making changes, you can skip this step and go directly to [Step 2: Deploy to OpenShift](#step-2-deploy-to-openShift).
 
 ```bash
 cd library-system
@@ -53,16 +53,17 @@ The script will build and push:
 
 
 ### Step 2: Deploy to OpenShift
+```
+# Set your Docker Hub username (These variables have to be set only if you have built docker images and pulling from your docker registry)
+export DOCKER_USERNAME=<your-dockerhub-username>
+export IMAGE_TAG=<your-dockerimage-tag>
+```
 
 ```bash
 cd library-system
 
 # Login to OpenShift
 oc login
-
-# Set your Docker Hub username (These variables have to be set only if you have built docker images and pulling from your docker registry)
-export DOCKER_USERNAME=<your-dockerhub-username>
-export IMAGE_TAG=<your-dockerimage-tag>
 
 # Deploy the application
 chmod +x deploy-dockerhub.sh
@@ -108,7 +109,18 @@ This will:
 - Check MongoDB connectivity
 - Display real-time logs
 
-### Step 5: Add Latency (Optional)
+### Step 5: Invalidate the secret (Optional)
+To generate erroneous calls in Instana dashboard for the library-system application following steps can be performed:
+
+- In the OpenShift Console, switch to `library-system` namespace where application is deployed
+- Go to Workloads -> Secrets -> Edit secret `mongodb-credentials` by clicking on 3 dots against it and selecting "Edit Secret" option
+- Invalidate the key value of `password` by changing the originial value of `SecurePassword123!` to any other value.
+- Click on **Save**
+- Go to Workloads -> Pods and delete pods related to users-api and books-api deployments.
+
+These pods will get into CrashLoopBackOff and Error state as the password being used for authenticating to mongo db is incorrect now, leading to high erroneous calls in library-system application dashboard in Instana. 
+
+### Step 6: Add Latency (Optional)
 
 To test performance monitoring and Instana:
 
