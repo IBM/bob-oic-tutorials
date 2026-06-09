@@ -33,7 +33,6 @@ The sample application represents a simple library-system composed of multiple m
 * **Web UI**
 
   * Built using Node.js and Express.
-  * Exposes the frontend interface on port **3000**.
   * Communicates with backend microservices to manage library operations.
 
 * **Books API**
