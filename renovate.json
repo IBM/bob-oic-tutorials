@@ -10,6 +10,12 @@
     "automerge": true,
     "automergeType": "pr"
   },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true,
+    "automergeType": "pr",
+    "schedule": ["before 5am on monday"]
+  },
   "packageRules": [
     {
       "description": "Disable routine version bumps for all packages",
