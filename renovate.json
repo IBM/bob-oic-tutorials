@@ -3,20 +3,18 @@
   "extends": [
     "config:recommended"
   ],
+  "dependencyDashboard": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"],
+    "automerge": true,
+    "automergeType": "pr"
+  },
   "packageRules": [
     {
-      "description": "Disable all general package version updates",
+      "description": "Disable routine version bumps for all packages",
       "matchPackagePatterns": ["*"],
       "enabled": false
-    },
-    {
-      "description": "Enable PRs strictly for known vulnerabilities with automerge enabled",
-      "matchDatasources": ["*"],
-      "vulnerabilityAlerts": {
-        "enabled": true
-      },
-      "automerge": true,
-      "automergeType": "pr"
     }
   ]
 }
