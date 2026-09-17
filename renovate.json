@@ -10,11 +10,13 @@
       "enabled": false
     },
     {
-      "description": "Enable PRs strictly for known vulnerabilities",
+      "description": "Enable PRs strictly for known vulnerabilities with automerge enabled",
       "matchDatasources": ["*"],
       "vulnerabilityAlerts": {
         "enabled": true
-      }
+      },
+      "automerge": true,
+      "automergeType": "pr"
     }
   ]
 }
