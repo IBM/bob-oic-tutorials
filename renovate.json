@@ -13,8 +13,10 @@
   "packageRules": [
     {
       "description": "Disable routine version bumps for all packages",
-      "matchPackagePatterns": ["*"],
-      "enabled": false
+      "enabled": false,
+      "matchPackageNames": [
+        "*"
+      ]
     }
   ]
 }
