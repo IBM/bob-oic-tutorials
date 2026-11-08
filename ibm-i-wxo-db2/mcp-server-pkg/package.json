@@ -10,5 +10,9 @@
   "type": "commonjs",
   "dependencies": {
     "@ibm/ibmi-mcp-server": "latest"
+  },
+  "overrides": {
+    "glob": ">=14.0.2",
+    "zod": ">=4.6.6"
   }
 }
